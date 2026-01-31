@@ -15,14 +15,16 @@ export function useNav(): NavGroup[] {
         {
             label: 'General',
             items: [
-                { label: 'Dashboard', to: '/dashboard', icon: '🏠' },
-                { label: 'Timesheets', to: '/timesheets', icon: '🧾' }
+                { label: 'Dashboard', to: '/dashboard', icon: 'mdi:home' },
+                { label: 'Timesheets', to: '/timesheets', icon: 'mdi:file-document-outline' },
+
+
             ]
         },
         {
             label: 'Self Service',
             items: [
-                { label: 'My Profile', to: '/profile', icon: '👤' }
+                { label: 'My Profile', to: '/profile', icon: 'mdi:account' }
             ]
         }
     ]

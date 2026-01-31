@@ -12,17 +12,16 @@ export type AuthLoginResponse = {
 }
 
 export const authApi = {
-    register(payload: registerPayload) {
-        return $fetch<AuthLoginResponse>("/api/auth/register", {
-            method: "POST",
-            body: payload,
-        })
-    },
-
-    login(payload: LoginPayload) {
-        return $fetch<AuthLoginResponse>("/api/auth/login", {
-            method: "POST",
-            body: payload,
-        })
-    },
+        login(payload: LoginPayload) {
+            return apiClient<AuthLoginResponse>("/auth/login", {
+                method: "POST",
+                body: payload,
+            })
+        },
+        register(payload: registerPayload) {
+            return apiClient<AuthLoginResponse>("/auth/register", {
+                method: "POST",
+                body: payload,
+            })
+        },
 }

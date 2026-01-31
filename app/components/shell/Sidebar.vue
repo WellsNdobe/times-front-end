@@ -42,9 +42,12 @@
             :class="{ 'nav-item--active': currentPath === item.to }"
             @click="$emit('close-mobile')"
         >
-          <span class="nav-item__icon" aria-hidden="true">{{ item.icon }}</span>
+  <span class="nav-item__icon" aria-hidden="true">
+    <Icon :name="item.icon" size="30" />
+  </span>
           <span class="nav-item__label" v-if="!collapsed">{{ item.label }}</span>
         </NuxtLink>
+
       </div>
     </nav>
   </aside>

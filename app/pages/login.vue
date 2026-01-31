@@ -1,3 +1,30 @@
+<script setup lang="ts">
+definePageMeta({ layout: "auth" })
+
+import { ref } from "vue"
+import { toUiError, type UiError } from "~/utils/errorMessages"
+
+const { login } = useAuth()
+
+const email = ref("")
+const password = ref("")
+const loading = ref(false)
+const error = ref<UiError | null>(null)
+
+async function onSubmit() {
+  error.value = null
+  loading.value = true
+  try {
+    await login(email.value, password.value)
+  } catch (e) {
+    console.error("Login error:", e) // dev-only detail
+    error.value = toUiError(e)
+  } finally {
+    loading.value = false
+  }
+}
+</script>
+
 <template>
   <div class="auth">
     <div class="card">
@@ -12,17 +39,15 @@
 
         <label>
           Password
-          <input
-              v-model="password"
-              type="password"
-              autocomplete="current-password"
-              required
-          />
+          <input v-model="password" type="password" autocomplete="current-password" required />
         </label>
 
-        <p v-if="error" class="error">{{ error }}</p>
+        <div v-if="error" class="alert" role="alert" aria-live="polite">
+          <div class="alert__title">{{ error.title }}</div>
+          <div class="alert__msg">{{ error.message }}</div>
+        </div>
 
-        <button class="btn" type="submit" :disabled="loading">
+        <button class="btn btn-primary" type="submit" :disabled="loading">
           {{ loading ? "Signing in..." : "Sign in" }}
         </button>
 
@@ -35,30 +60,8 @@
   </div>
 </template>
 
-<script setup lang="ts">
-//definePageMeta({ middleware: "guest", layout: "default" }); // change layout if you want a blank auth layout
 
-import { ref } from "vue";
-//const { login } = useAuth();
 
-const email = ref("");
-const password = ref("");
-const loading = ref(false);
-const error = ref<string | null>(null);
-
-async function onSubmit() {
-  error.value = null;
-  loading.value = true;
-  try {
-    //await login(email.value, password.value);
-  } catch (e: any) {
-    // Nuxt $fetch errors usually have e.data?.message
-    error.value = e?.data?.message || e?.message || "Unable to sign in.";
-  } finally {
-    loading.value = false;
-  }
-}
-</script>
 
 <style scoped>
 .auth {
@@ -98,6 +101,18 @@ input:focus { border-color: rgba(0,0,0,.35); }
   cursor: pointer;
   font-weight: 600;
 }
+.alert {
+  border: 1px solid var(--danger);
+  background: var(--danger-soft);
+  border-radius: var(--r-sm);
+  padding: var(--s-3);
+}
+.alert__title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.alert__msg {
+  color: var(--text-2);
+}
 
-.error { color: #b42318; margin: 0; }
 </style>
