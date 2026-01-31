@@ -32,6 +32,9 @@
     --info: #2563EB;
     --info-soft: #EAF1FF;
 
+    --focus: rgba(15, 118, 110, 0.45);
+    --focus-soft: rgba(15, 118, 110, 0.14);
+
     /* Radius */
     --r-sm: 10px;
     --r-md: 12px;

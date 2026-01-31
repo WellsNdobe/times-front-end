@@ -4,7 +4,6 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints'],
     css: [
-        '@/assets/styles/tokens.css',
-        '@/assets/styles/base.css'
-    ]
+    '~/assets/styles/tokens.css',
+    '~/assets/styles/base.css']
 })
