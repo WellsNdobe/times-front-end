@@ -1,4 +1,5 @@
 <template>
+
   <div class="auth">
     <div class="card">
       <h1>Create account</h1>
@@ -6,8 +7,13 @@
 
       <form @submit.prevent="onSubmit" class="form">
         <label>
-          Name
-          <input v-model.trim="name" type="text" autocomplete="name" required />
+          First name
+          <input v-model.trim="firstName" type="text" autocomplete="given-name" required />
+        </label>
+
+        <label>
+          Last name
+          <input v-model.trim="lastName" type="text" autocomplete="family-name" required />
         </label>
 
         <label>
@@ -53,33 +59,52 @@
 </template>
 
 <script setup lang="ts">
-//definePageMeta({ middleware: "guest", layout: "default" });
+definePageMeta({ layout: "auth" })
 
-import { ref } from "vue";
-//const { register } = useAuth();
+import { ref } from "vue"
+import { authApi } from "~/api/authApi"
 
-const name = ref("");
-const email = ref("");
-const password = ref("");
-const confirm = ref("");
-const loading = ref(false);
-const error = ref<string | null>(null);
+const firstName = ref("")
+const lastName = ref("")
+const email = ref("")
+const password = ref("")
+const confirm = ref("")
+
+const loading = ref(false)
+const error = ref<string | null>(null)
+const success = ref<string | null>(null)
 
 async function onSubmit() {
-  error.value = null;
+  error.value = null
+  success.value = null
 
   if (password.value !== confirm.value) {
-    error.value = "Passwords do not match.";
-    return;
+    error.value = "Passwords do not match."
+    return
   }
 
-  loading.value = true;
+  loading.value = true
   try {
-    //await register(name.value, email.value, password.value);
+    const res = await authApi.register({
+      firstName: firstName.value,
+      lastName: lastName.value,
+      email: email.value,
+      password: password.value,
+    })
+
+    if (!res.token) {
+      success.value = "Account created. Please sign in."
+      await navigateTo("/login")
+      return
+    }
+
+    const token = useCookie<string | null>("auth_token", { sameSite: "lax" })
+    token.value = res.token
+    await navigateTo("/dashboard")
   } catch (e: any) {
-    error.value = e?.data?.message || e?.message || "Unable to register.";
+    error.value = e?.data || e?.data?.message || e?.message || "Unable to register."
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 </script>

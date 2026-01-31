@@ -1,25 +1,33 @@
 // app/api/authApi.ts
 import { apiClient } from "~/api/apiClient"
 
-export type LoginPayload = { email: string; password: string }
+export type LoginRequest = {
+    email: string
+    password: string
+}
 
-export type registerPayload = { email: string; password: string, firstName: string , lastName: string }
+export type RegisterRequest = {
+    email: string
+    password: string
+    firstName: string
+    lastName: string
+}
 
-export type AuthLoginResponse = {
+export type AuthResponse = {
     userId: string
     email: string
-    token: string
+    token: string | null
 }
 
 export const authApi = {
-        login(payload: LoginPayload) {
-            return apiClient<AuthLoginResponse>("/auth/login", {
+        login(payload: LoginRequest) {
+            return apiClient<AuthResponse>("/auth/login", {
                 method: "POST",
                 body: payload,
             })
         },
-        register(payload: registerPayload) {
-            return apiClient<AuthLoginResponse>("/auth/register", {
+        register(payload: RegisterRequest) {
+            return apiClient<AuthResponse>("/auth/register", {
                 method: "POST",
                 body: payload,
             })
