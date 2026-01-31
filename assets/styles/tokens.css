@@ -1,0 +1,52 @@
+:root {
+    /* Typography */
+    --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    --text-1: #111827;
+    --text-2: #4B5563;
+    --text-3: #6B7280;
+
+    /* Brand */
+    --primary: #0F766E;
+    --primary-hover: #0B5F59;
+    --primary-soft: #E6F4F3;
+
+
+    --accent: #F4B67A;
+    --accent-soft: #FFF3E6;
+
+    /* Surfaces */
+    --bg: #F7F8FC;
+    --surface: #FFFFFF;
+    --surface-2: #F2F4FA;
+
+    /* Borders */
+    --border: #E4E8F2;
+
+    /* Status */
+    --success: #16A34A;
+    --success-soft: #EAF8EF;
+    --warning: #D97706;
+    --warning-soft: #FFF4E6;
+    --danger: #DC2626;
+    --danger-soft: #FDECEC;
+    --info: #2563EB;
+    --info-soft: #EAF1FF;
+
+    /* Radius */
+    --r-sm: 10px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-pill: 999px;
+
+    /* Spacing (8pt-ish) */
+    --s-1: 4px;
+    --s-2: 8px;
+    --s-3: 12px;
+    --s-4: 16px;
+    --s-5: 24px;
+    --s-6: 32px;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.06), 0 0 0 1px rgba(228, 232, 242, 0.7);
+    --shadow-md: 0 10px 30px rgba(17, 24, 39, 0.10), 0 0 0 1px rgba(228, 232, 242, 0.6);
+}
