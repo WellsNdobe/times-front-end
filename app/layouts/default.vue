@@ -1,5 +1,5 @@
 <template>
-  <div class="shell">
+  <div class="shell" :class="{ collapsed: isCollapsed }">
     <AppSidebar
         :nav="nav"
         :collapsed="isCollapsed"
@@ -12,7 +12,6 @@
 
     <AppTopbar :title="pageTitle" @open-mobile="openMobileSidebar" />
 
-    <!-- Backdrop for mobile drawer -->
     <div v-if="isMobileOpen" class="backdrop" @click="isMobileOpen = false"></div>
 
     <main class="main">
@@ -20,6 +19,7 @@
     </main>
   </div>
 </template>
+
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
@@ -83,11 +83,14 @@ const pageTitle = computed(() => {
     "sidebar main";
 }
 
+.shell.collapsed {
+  grid-template-columns: 72px 1fr;
+}
+
 .main {
   grid-area: main;
   padding: var(--s-5);
 }
-
 @media (max-width: 960px) {
   .shell {
     grid-template-columns: 1fr;
