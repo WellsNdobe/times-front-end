@@ -5,5 +5,13 @@ export default defineNuxtConfig({
   modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints'],
     css: [
     '~/assets/styles/tokens.css',
-    '~/assets/styles/base.css']
+    '~/assets/styles/base.css'],
+        nitro: {
+            devProxy: {
+                "/api": {
+                    target: "http://localhost:5275",
+                    changeOrigin: true,
+                },
+            },
+        },
 })
