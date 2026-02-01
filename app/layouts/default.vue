@@ -66,7 +66,13 @@ function openMobileSidebar() {
 
 const pageTitle = computed(() => {
   if (route.path === '/dashboard') return 'Dashboard'
-  if (route.path.startsWith('/timesheets')) return 'Timesheets'
+  if (route.path === '/track') return 'Track'
+  if (route.path.startsWith('/timesheets')) return 'Timesheet'
+  if (route.path === '/approvals') return 'Approvals'
+  if (route.path === '/reports') return 'Reports'
+  if (route.path === '/projects') return 'Projects'
+  if (route.path === '/clients') return 'Clients'
+  if (route.path === '/team') return 'Team'
   if (route.path === '/profile') return 'My Profile'
   return ''
 })
