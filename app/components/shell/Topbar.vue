@@ -14,16 +14,16 @@
     <div class="topbar__title">{{ title }}</div>
 
     <div class="topbar__actions">
-      <!-- Notifications -->
+      <!-- Notifications (bell always visible; badge only when unread) -->
       <div class="menu" ref="menuRef">
         <button
-            class="icon-btn"
+            class="icon-btn icon-btn--notif"
             type="button"
             aria-label="Notifications"
             @click="toggleNotif"
         >
           <Icon
-              :name="notifCount ? 'mdi:bell-ring-outline' : 'mdi:bell-outline'"
+              name="mdi:bell-outline"
               size="22"
               class="notif-bell"
               :class="{ 'notif-bell--active': notifCount }"
@@ -217,6 +217,15 @@ onBeforeUnmount(() => {
 
 .icon-btn:hover {
   background: var(--surface-2);
+}
+
+/* Notifications button: always visible, never collapses when badge is hidden */
+.icon-btn--notif {
+  min-width: 38px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .notif-bell--active {
