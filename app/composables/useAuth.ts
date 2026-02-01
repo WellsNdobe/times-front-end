@@ -39,7 +39,12 @@ export function useAuth() {
         await navigateTo('/dashboard')
     }
 
-    function logout() {
+    async function logout() {
+        try {
+            await authApi.logout()
+        } catch {
+            // Still clear local state and redirect if backend fails (e.g. no token, network)
+        }
         token.value = null
         user.value = null
         return navigateTo('/login')
