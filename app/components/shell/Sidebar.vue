@@ -79,6 +79,7 @@
           aria-label="Logout"
           title="Logout"
           :data-tooltip="collapsed ? 'Logout' : null"
+          @click="onLogoutClick"
       >
         <span class="footer-btn__icon" aria-hidden="true">
           <Icon name="mdi:logout" size="22" />
@@ -90,6 +91,8 @@
 </template>
 
 <script setup lang="ts">
+import { useAuth } from '~/composables/useAuth'
+
 type NavItem = { to: string; label: string; icon: string }
 type NavGroup = { label: string; items: NavItem[] }
 
@@ -106,8 +109,15 @@ const emit = defineEmits<{
   (e: 'close-mobile'): void
 }>()
 
+const { logout } = useAuth()
+
 function onLogoClick() {
   emit('logo-click')
+}
+
+async function onLogoutClick() {
+  if (!confirm('Are you sure you want to log out?')) return
+  await logout()
 }
 </script>
 

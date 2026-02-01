@@ -32,4 +32,10 @@ export const authApi = {
                 body: payload,
             })
         },
+        /** Calls backend to revoke the current token. */
+        logout() {
+            return apiClient<{ message: string }>("/auth/logout", {
+                method: "POST",
+            })
+        },
 }
