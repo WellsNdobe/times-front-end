@@ -1,3 +1,7 @@
+<script setup lang="ts">
+definePageMeta({ middleware: "auth" })
+</script>
+
 <template>
   <section class="card" style="padding: var(--s-5);">
     <h1 style="margin: 0 0 var(--s-3) 0;">Dashboard</h1>

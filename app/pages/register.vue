@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-definePageMeta({ layout: "auth" })
+definePageMeta({ layout: "auth", middleware: "guest" })
 
 import { ref } from "vue"
 import { authApi } from "~/api/authApi"
