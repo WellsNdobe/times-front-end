@@ -31,7 +31,7 @@
           aria-label="Collapse sidebar"
           title="Collapse"
       >
-        ⟨
+        <Icon name="mdi:chevron-left" size="22" aria-hidden="true" />
       </button>
     </div>
 
@@ -100,6 +100,7 @@ function onLogoClick() {
 /* Sidebar full height */
 .sidebar {
   grid-area: sidebar;
+  min-width: 0; /* allow grid item to shrink below content size when collapsed */
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
@@ -268,6 +269,8 @@ function onLogoClick() {
 /* Collapsed sidebar */
 .sidebar--collapsed {
   width: 72px;
+  min-width: 72px;
+  max-width: 72px;
 }
 .sidebar--collapsed .nav {
   padding: var(--s-3) var(--s-2);

@@ -93,6 +93,11 @@ const pageTitle = computed(() => {
   grid-template-columns: 72px 1fr;
 }
 
+/* Let sidebar grid item shrink (default min-width: auto would keep it wide) */
+.shell.collapsed > :first-child {
+  min-width: 0;
+}
+
 .main {
   grid-area: main;
   padding: var(--s-5);
