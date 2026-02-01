@@ -14,7 +14,9 @@
           @click="onLogoClick"
           :title="collapsed ? 'Open sidebar' : 'Home'"
       >
-        <span class="logo-mark">T</span>
+        <span class="logo-mark" aria-hidden="true">
+          <Icon name="mdi:clock-outline" size="28" />
+        </span>
         <span v-if="!collapsed" class="logo-text">Times</span>
       </button>
 
@@ -43,13 +45,29 @@
             @click="$emit('close-mobile')"
         >
   <span class="nav-item__icon" aria-hidden="true">
-    <Icon :name="item.icon" size="30" />
+    <Icon :name="item.icon" size="24" />
   </span>
           <span class="nav-item__label" v-if="!collapsed">{{ item.label }}</span>
         </NuxtLink>
 
       </div>
     </nav>
+
+    <div class="sidebar__footer">
+      <button class="footer-btn" type="button" aria-label="FAQ">
+        <span class="footer-btn__icon" aria-hidden="true">
+          <Icon name="mdi:help-circle-outline" size="22" />
+        </span>
+        <span v-if="!collapsed" class="footer-btn__label">FAQ</span>
+      </button>
+
+      <button class="footer-btn footer-btn--logout" type="button" aria-label="Logout">
+        <span class="footer-btn__icon" aria-hidden="true">
+          <Icon name="mdi:logout" size="22" />
+        </span>
+        <span v-if="!collapsed" class="footer-btn__label">Logout</span>
+      </button>
+    </div>
   </aside>
 </template>
 
@@ -111,14 +129,16 @@ function onLogoClick() {
 }
 
 .logo-mark {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
-  border-radius: 10px;
+  border-radius: var(--r-sm);
   background: var(--primary-soft);
   color: var(--primary);
-  font-weight: 800;
+}
+.logo-mark :deep(svg) {
+  color: inherit;
 }
 
 .logo-text {
@@ -143,6 +163,7 @@ function onLogoClick() {
 .nav {
   padding: var(--s-3);
   overflow: auto;
+  flex: 1;
 }
 
 .nav-group {
@@ -176,8 +197,57 @@ function onLogoClick() {
 }
 
 .nav-item__icon {
-  width: 20px;
-  text-align: center;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Footer actions */
+.sidebar__footer {
+  border-top: 1px solid var(--border);
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.footer-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-1);
+}
+
+.footer-btn:hover {
+  background: var(--surface-2);
+}
+
+.footer-btn--logout {
+  color: var(--danger);
+}
+
+.footer-btn--logout:hover {
+  background: rgba(231, 76, 60, 0.12);
+}
+
+.footer-btn__icon {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.footer-btn__label {
+  font-weight: 600;
 }
 
 /* Collapsed sidebar */
