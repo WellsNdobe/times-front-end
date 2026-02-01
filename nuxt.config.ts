@@ -9,6 +9,19 @@ export default defineNuxtConfig({
     css: [
     '~/assets/styles/tokens.css',
     '~/assets/styles/base.css'],
+    runtimeConfig: {
+        public: {
+            apiBase: "http://localhost:5275/api",
+        },
+    },
+    nitro: {
+        devProxy: {
+            "/api": {
+                target: "http://localhost:5275",
+                changeOrigin: true,
+            },
+        },
+    },
     vite: {
         server: {
             proxy: {
