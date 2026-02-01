@@ -15,9 +15,12 @@
           :title="collapsed ? 'Open sidebar' : 'Home'"
       >
         <span class="logo-mark" aria-hidden="true">
-          <Icon name="mdi:clock-outline" size="28" />
+          <Icon name="mdi:clock-outline" size="18" />
         </span>
-        <span v-if="!collapsed" class="logo-text">Times</span>
+        <span v-if="!collapsed" class="logo-text">
+          <Icon name="mdi:timer-sand-complete" size="20" aria-hidden="true" />
+          <span class="sr-only">Times</span>
+        </span>
       </button>
 
       <!-- Collapse button only when expanded (right aligned) -->
@@ -45,7 +48,7 @@
             @click="$emit('close-mobile')"
         >
   <span class="nav-item__icon" aria-hidden="true">
-    <Icon :name="item.icon" size="24" />
+    <Icon :name="item.icon" size="30" />
   </span>
           <span class="nav-item__label" v-if="!collapsed">{{ item.label }}</span>
         </NuxtLink>
@@ -248,6 +251,18 @@ function onLogoClick() {
 
 .footer-btn__label {
   font-weight: 600;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Collapsed sidebar */
