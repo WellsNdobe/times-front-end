@@ -2,7 +2,6 @@
 export default defineNuxtConfig({
     components: [
     { path: '~/app/components', pathPrefix: false },
-    { path: '~/features', pathPrefix: false }
 ],
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
