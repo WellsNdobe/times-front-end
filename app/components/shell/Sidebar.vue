@@ -13,6 +13,7 @@
           class="logo-btn"
           @click="onLogoClick"
           :title="collapsed ? 'Open sidebar' : 'Home'"
+          :data-tooltip="collapsed ? 'Open sidebar' : null"
       >
         <span class="logo-mark" aria-hidden="true">
           <Icon name="mdi:clock-outline" size="18" />
@@ -45,6 +46,8 @@
             :to="item.to"
             class="nav-item"
             :class="{ 'nav-item--active': currentPath === item.to }"
+            :title="item.label"
+            :data-tooltip="collapsed ? item.label : null"
             @click="$emit('close-mobile')"
         >
   <span class="nav-item__icon" aria-hidden="true">
@@ -57,14 +60,26 @@
     </nav>
 
     <div class="sidebar__footer">
-      <button class="footer-btn" type="button" aria-label="FAQ">
+      <button
+          class="footer-btn"
+          type="button"
+          aria-label="FAQ"
+          title="FAQ"
+          :data-tooltip="collapsed ? 'FAQ' : null"
+      >
         <span class="footer-btn__icon" aria-hidden="true">
           <Icon name="mdi:help-circle-outline" size="22" />
         </span>
         <span v-if="!collapsed" class="footer-btn__label">FAQ</span>
       </button>
 
-      <button class="footer-btn footer-btn--logout" type="button" aria-label="Logout">
+      <button
+          class="footer-btn footer-btn--logout"
+          type="button"
+          aria-label="Logout"
+          title="Logout"
+          :data-tooltip="collapsed ? 'Logout' : null"
+      >
         <span class="footer-btn__icon" aria-hidden="true">
           <Icon name="mdi:logout" size="22" />
         </span>
@@ -276,18 +291,67 @@ function onLogoClick() {
   padding: var(--s-3) var(--s-2);
 }
 
-.sidebar--collapsed .logo-btn::after {
-  content: "›";
-  margin-left: 6px;
-  color: var(--text-3);
-  font-weight: 700;
-  opacity: 0;
-  transform: translateX(-2px);
-  transition: 0.15s ease;
+.sidebar--collapsed .logo-btn,
+.sidebar--collapsed .nav-item,
+.sidebar--collapsed .footer-btn {
+  position: relative;
 }
-.sidebar--collapsed .logo-btn:hover::after {
+
+.sidebar--collapsed .logo-btn::after,
+.sidebar--collapsed .nav-item::after,
+.sidebar--collapsed .footer-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--text-1);
+  color: var(--surface);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: var(--shadow-sm);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 60;
+}
+
+.sidebar--collapsed .logo-btn::before,
+.sidebar--collapsed .nav-item::before,
+.sidebar--collapsed .footer-btn::before {
+  content: "";
+  position: absolute;
+  left: calc(100% + 4px);
+  top: 50%;
+  transform: translateY(-50%);
+  border: 6px solid transparent;
+  border-right-color: var(--text-1);
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  z-index: 59;
+}
+
+.sidebar--collapsed .logo-btn:hover::after,
+.sidebar--collapsed .nav-item:hover::after,
+.sidebar--collapsed .footer-btn:hover::after,
+.sidebar--collapsed .logo-btn:focus-visible::after,
+.sidebar--collapsed .nav-item:focus-visible::after,
+.sidebar--collapsed .footer-btn:focus-visible::after {
   opacity: 1;
-  transform: translateX(0);
+  transform: translateY(-50%) translateX(2px);
+}
+
+.sidebar--collapsed .logo-btn:hover::before,
+.sidebar--collapsed .nav-item:hover::before,
+.sidebar--collapsed .footer-btn:hover::before,
+.sidebar--collapsed .logo-btn:focus-visible::before,
+.sidebar--collapsed .nav-item:focus-visible::before,
+.sidebar--collapsed .footer-btn:focus-visible::before {
+  opacity: 1;
 }
 
 /* Mobile behavior: sidebar becomes drawer overlay */
