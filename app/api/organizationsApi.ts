@@ -21,20 +21,30 @@ export type UpdateOrganizationRequest = {
 
 export type OrganizationMember = {
     id: string
-    userId?: string
-    email?: string
-    displayName?: string
-    role?: string
-    [key: string]: unknown
+    organizationId: string
+    userId: string
+    role: number
+    isActive: boolean
+    createdAtUtc: string
+    updatedAtUtc: string
 }
 
 export type AddMemberRequest = {
+    userId: string
+    role: number
+}
+
+export type CreateUserMemberRequest = {
     email: string
-    role?: string
+    firstName: string
+    lastName: string
+    password: string
+    role: number
 }
 
 export type UpdateMemberRequest = {
-    role?: string
+    role?: number
+    isActive?: boolean
 }
 
 export const organizationsApi = {
@@ -81,6 +91,17 @@ export const organizationsApi = {
             method: "POST",
             body: payload,
         })
+    },
+
+    /** POST api/v1/organizations/{organizationId}/members/create-user */
+    createMemberWithUser(organizationId: string, payload: CreateUserMemberRequest) {
+        return apiClient<OrganizationMember>(
+            `/v1/organizations/${organizationId}/members/create-user`,
+            {
+                method: "POST",
+                body: payload,
+            }
+        )
     },
 
     /** PATCH api/v1/organizations/{organizationId}/members/{memberId} */

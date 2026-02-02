@@ -7,6 +7,8 @@ import {
     type Organization,
     type OrganizationMember,
     type AddMemberRequest,
+    type CreateUserMemberRequest,
+    type UpdateMemberRequest,
 } from "~/api/organizationsApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
@@ -15,13 +17,21 @@ const members = ref<OrganizationMember[]>([])
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 
-const addForm = ref({ email: "", role: "Member" })
+const addMode = ref<"existing" | "create">("existing")
+const addForm = ref({
+    userId: "",
+    email: "",
+    firstName: "",
+    lastName: "",
+    password: "",
+    role: 2,
+})
 const addLoading = ref(false)
 const addError = ref<UiError | null>(null)
 const showAddForm = ref(false)
 
 const editingMemberId = ref<string | null>(null)
-const editRole = ref("")
+const editRole = ref(2)
 const updateLoading = ref(false)
 const updateError = ref<UiError | null>(null)
 
@@ -54,13 +64,31 @@ async function onAddMember() {
     addError.value = null
     addLoading.value = true
     try {
-        const payload: AddMemberRequest = {
-            email: addForm.value.email.trim(),
-            role: addForm.value.role || undefined,
+        if (addMode.value === "existing") {
+            const payload: AddMemberRequest = {
+                userId: addForm.value.userId.trim(),
+                role: addForm.value.role,
+            }
+            await organizationsApi.addMember(organizationId.value, payload)
+        } else {
+            const payload: CreateUserMemberRequest = {
+                email: addForm.value.email.trim(),
+                firstName: addForm.value.firstName.trim(),
+                lastName: addForm.value.lastName.trim(),
+                password: addForm.value.password,
+                role: addForm.value.role,
+            }
+            await organizationsApi.createMemberWithUser(organizationId.value, payload)
         }
-        await organizationsApi.addMember(organizationId.value, payload)
         await loadTeam()
-        addForm.value = { email: "", role: "Member" }
+        addForm.value = {
+            userId: "",
+            email: "",
+            firstName: "",
+            lastName: "",
+            password: "",
+            role: 2,
+        }
         showAddForm.value = false
     } catch (e) {
         console.error("Add member error:", e)
@@ -72,7 +100,7 @@ async function onAddMember() {
 
 function startEdit(member: OrganizationMember) {
     editingMemberId.value = member.id
-    editRole.value = (member.role as string) ?? "Member"
+    editRole.value = member.role ?? 2
     updateError.value = null
 }
 
@@ -86,9 +114,8 @@ async function onUpdateMember() {
     updateError.value = null
     updateLoading.value = true
     try {
-        await organizationsApi.updateMember(organizationId.value, editingMemberId.value, {
-            role: editRole.value || undefined,
-        })
+        const payload: UpdateMemberRequest = { role: editRole.value }
+        await organizationsApi.updateMember(organizationId.value, editingMemberId.value, payload)
         await loadTeam()
         editingMemberId.value = null
     } catch (e) {
@@ -99,7 +126,16 @@ async function onUpdateMember() {
     }
 }
 
-const roleOptions = ["Admin", "Member", "Viewer"]
+const roleOptions = [
+    { label: "Admin", value: 0 },
+    { label: "Manager", value: 1 },
+    { label: "Employee", value: 2 },
+]
+
+const roleLabelByValue = (role?: number) =>
+    roleOptions.find((option) => option.value === role)?.label ?? "—"
+
+const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" : "Inactive")
 </script>
 
 <template>
@@ -137,19 +173,76 @@ const roleOptions = ["Admin", "Member", "Viewer"]
             >
                 <div class="form-row">
                     <label class="form-field">
-                        <span class="form-field__label">Email</span>
+                        <span class="form-field__label">Add type</span>
+                        <select v-model="addMode">
+                            <option value="existing">Add existing user</option>
+                            <option value="create">Create new user</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label v-if="addMode === 'existing'" class="form-field">
+                        <span class="form-field__label">User ID</span>
                         <input
-                            v-model.trim="addForm.email"
-                            type="email"
+                            v-model.trim="addForm.userId"
+                            type="text"
                             required
-                            placeholder="colleague@example.com"
-                            autocomplete="email"
+                            placeholder="user_123"
+                            autocomplete="off"
                         />
                     </label>
+                    <template v-else>
+                        <label class="form-field">
+                            <span class="form-field__label">Email</span>
+                            <input
+                                v-model.trim="addForm.email"
+                                type="email"
+                                required
+                                placeholder="colleague@example.com"
+                                autocomplete="email"
+                            />
+                        </label>
+                        <label class="form-field">
+                            <span class="form-field__label">First name</span>
+                            <input
+                                v-model.trim="addForm.firstName"
+                                type="text"
+                                required
+                                placeholder="Alex"
+                                autocomplete="given-name"
+                            />
+                        </label>
+                        <label class="form-field">
+                            <span class="form-field__label">Last name</span>
+                            <input
+                                v-model.trim="addForm.lastName"
+                                type="text"
+                                required
+                                placeholder="Lee"
+                                autocomplete="family-name"
+                            />
+                        </label>
+                        <label class="form-field">
+                            <span class="form-field__label">Temporary password</span>
+                            <input
+                                v-model="addForm.password"
+                                type="password"
+                                required
+                                placeholder="At least 8 characters"
+                                autocomplete="new-password"
+                            />
+                        </label>
+                    </template>
                     <label class="form-field">
                         <span class="form-field__label">Role</span>
-                        <select v-model="addForm.role">
-                            <option v-for="r in roleOptions" :key="r" :value="r">{{ r }}</option>
+                        <select v-model.number="addForm.role">
+                            <option
+                                v-for="r in roleOptions"
+                                :key="r.value"
+                                :value="r.value"
+                            >
+                                {{ r.label }}
+                            </option>
                         </select>
                     </label>
                 </div>
@@ -166,26 +259,27 @@ const roleOptions = ["Admin", "Member", "Viewer"]
                 <table class="team-table" v-if="members.length">
                     <thead>
                         <tr>
-                            <th>Member</th>
+                            <th>User ID</th>
                             <th>Role</th>
+                            <th>Status</th>
                             <th class="team-table__actions">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr v-for="member in members" :key="member.id">
                             <td>
-                                <span class="member-name">{{
-                                    member.displayName || member.email || "—"
-                                }}</span>
-                                <span v-if="member.email && member.displayName" class="member-email">
-                                    {{ member.email }}
-                                </span>
+                                <span class="member-name">{{ member.userId || "—" }}</span>
+                                <span class="member-email">{{ member.id }}</span>
                             </td>
                             <td>
                                 <template v-if="editingMemberId === member.id">
-                                    <select v-model="editRole" class="edit-role">
-                                        <option v-for="r in roleOptions" :key="r" :value="r">
-                                            {{ r }}
+                                    <select v-model.number="editRole" class="edit-role">
+                                        <option
+                                            v-for="r in roleOptions"
+                                            :key="r.value"
+                                            :value="r.value"
+                                        >
+                                            {{ r.label }}
                                         </option>
                                     </select>
                                     <div class="edit-actions">
@@ -210,7 +304,10 @@ const roleOptions = ["Admin", "Member", "Viewer"]
                                         {{ updateError.message }}
                                     </div>
                                 </template>
-                                <span v-else>{{ (member.role as string) || "—" }}</span>
+                                <span v-else>{{ roleLabelByValue(member.role) }}</span>
+                            </td>
+                            <td>
+                                <span>{{ statusLabel(member) }}</span>
                             </td>
                             <td class="team-table__actions">
                                 <button
