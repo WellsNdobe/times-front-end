@@ -23,6 +23,8 @@ export type OrganizationMember = {
     id: string
     organizationId: string
     userId: string
+    firstName?: string
+    lastName?: string
     role: number
     isActive: boolean
     createdAtUtc: string
