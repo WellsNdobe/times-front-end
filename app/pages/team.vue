@@ -64,13 +64,39 @@ async function onAddMember() {
     addError.value = null
     addLoading.value = true
     try {
+        if (!organizationId.value) {
+            addError.value = {
+                title: "Missing organization",
+                message: "Select an organization before adding a team member.",
+            }
+            return
+        }
         if (addMode.value === "existing") {
+            if (!addForm.value.userId.trim()) {
+                addError.value = {
+                    title: "Missing user id",
+                    message: "Enter a valid user id before adding an existing user.",
+                }
+                return
+            }
             const payload: AddMemberRequest = {
                 userId: addForm.value.userId.trim(),
                 role: addForm.value.role,
             }
             await organizationsApi.addMember(organizationId.value, payload)
         } else {
+            if (
+                !addForm.value.email.trim() ||
+                !addForm.value.firstName.trim() ||
+                !addForm.value.lastName.trim() ||
+                !addForm.value.password
+            ) {
+                addError.value = {
+                    title: "Missing details",
+                    message: "Fill out all fields before creating a new user.",
+                }
+                return
+            }
             const payload: CreateUserMemberRequest = {
                 email: addForm.value.email.trim(),
                 firstName: addForm.value.firstName.trim(),

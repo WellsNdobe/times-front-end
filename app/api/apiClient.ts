@@ -5,7 +5,7 @@ export const apiClient = $fetch.create({
     baseURL: "/api",
     onRequest({ options }: { options: FetchOptions }) {
         // Resolve base URL in request context so useRuntimeConfig() is valid (SSR)
-        if (process.server) {
+        if (import.meta.server) {
             const config = useRuntimeConfig()
             const path = (options.url as string)?.replace(/^\/api/, "") || "/"
             options.url = config.public.apiBase.replace(/\/$/, "") + path
