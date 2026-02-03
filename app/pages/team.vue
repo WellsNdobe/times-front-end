@@ -208,7 +208,7 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
                 </div>
                 <div class="form-row">
                     <label v-if="addMode === 'existing'" class="form-field">
-                        <span class="form-field__label">User ID</span>
+                        <span class="form-field__label">User identifier</span>
                         <input
                             v-model.trim="addForm.userId"
                             type="text"
@@ -216,6 +216,9 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
                             placeholder="user_123"
                             autocomplete="off"
                         />
+                        <span class="form-field__hint">
+                            Ask the user for their profile ID if they already have an account.
+                        </span>
                     </label>
                     <template v-else>
                         <label class="form-field">
@@ -285,7 +288,7 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
                 <table class="team-table" v-if="members.length">
                     <thead>
                         <tr>
-                            <th>User ID</th>
+                            <th>Member</th>
                             <th>Role</th>
                             <th>Status</th>
                             <th class="team-table__actions">Actions</th>
@@ -294,8 +297,8 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
                     <tbody>
                         <tr v-for="member in members" :key="member.id">
                             <td>
-                                <span class="member-name">{{ member.userId || "—" }}</span>
-                                <span class="member-email">{{ member.id }}</span>
+                                <span class="member-name">{{ member.userId || "Unknown member" }}</span>
+                                <span class="member-meta">Active team member</span>
                             </td>
                             <td>
                                 <template v-if="editingMemberId === member.id">
@@ -406,6 +409,11 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
     color: var(--text-2);
 }
 
+.form-field__hint {
+    font-size: 0.75rem;
+    color: var(--text-3);
+}
+
 .form .alert {
     margin-bottom: var(--s-3);
 }
@@ -443,7 +451,7 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
     font-weight: 600;
 }
 
-.member-email {
+.member-meta {
     display: block;
     font-size: 0.875rem;
     color: var(--text-2);
