@@ -162,6 +162,14 @@ const roleLabelByValue = (role?: number) =>
     roleOptions.find((option) => option.value === role)?.label ?? "—"
 
 const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" : "Inactive")
+
+const memberDisplayName = (member: OrganizationMember) => {
+    const name = [member.firstName, member.lastName].filter(Boolean).join(" ")
+    return name || member.userId || "Unknown member"
+}
+
+const memberMeta = (member: OrganizationMember) =>
+    member.userId ? `ID: ${member.userId}` : "Active team member"
 </script>
 
 <template>
@@ -297,8 +305,8 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
                     <tbody>
                         <tr v-for="member in members" :key="member.id">
                             <td>
-                                <span class="member-name">{{ member.userId || "Unknown member" }}</span>
-                                <span class="member-meta">Active team member</span>
+                                <span class="member-name">{{ memberDisplayName(member) }}</span>
+                                <span class="member-meta">{{ memberMeta(member) }}</span>
                             </td>
                             <td>
                                 <template v-if="editingMemberId === member.id">
