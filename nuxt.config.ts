@@ -5,7 +5,7 @@ export default defineNuxtConfig({
 ],
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
-  modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints'],
+  modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints', 'nuxt-icon'],
     css: [
     '~/assets/styles/tokens.css',
     '~/assets/styles/base.css'],
