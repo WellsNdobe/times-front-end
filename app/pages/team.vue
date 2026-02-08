@@ -10,10 +10,16 @@ import {
     type CreateUserMemberRequest,
     type UpdateMemberRequest,
 } from "~/api/organizationsApi"
+import { projectsApi, type Project, type ProjectAssignment } from "~/api/projectsApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
+import { useAuth } from "~/composables/useAuth"
 
 const org = ref<Organization | null>(null)
 const members = ref<OrganizationMember[]>([])
+const projects = ref<Project[]>([])
+const assignmentsByProject = ref<Record<string, ProjectAssignment[]>>({})
+const memberProjectSelection = ref<Record<string, string[]>>({})
+const assignmentSaving = ref<Record<string, boolean>>({})
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 
@@ -35,7 +41,16 @@ const editRole = ref(2)
 const updateLoading = ref(false)
 const updateError = ref<UiError | null>(null)
 
+const { user } = useAuth()
+
 const organizationId = computed(() => org.value?.id ?? "")
+const currentUserId = computed(() => user.value?.userId ?? "")
+const currentMember = computed(() =>
+    members.value.find((member) => member.userId === currentUserId.value)
+)
+const canManageAssignments = computed(
+    () => currentMember.value?.role === 0 || currentMember.value?.role === 1
+)
 
 async function loadTeam() {
     error.value = null
@@ -48,7 +63,14 @@ async function loadTeam() {
         }
         org.value = orgs[0]
         if (org.value?.id) {
-            members.value = await organizationsApi.getMembers(org.value.id)
+            const [membersResponse, projectsResponse] = await Promise.all([
+                organizationsApi.getMembers(org.value.id),
+                projectsApi.list(org.value.id),
+            ])
+            members.value = membersResponse
+            projects.value = projectsResponse
+            await hydrateAssignments(projectsResponse)
+            buildMemberProjectSelections()
         }
     } catch (e) {
         console.error("Load team error:", e)
@@ -149,6 +171,93 @@ async function onUpdateMember() {
         updateError.value = toUiError(e)
     } finally {
         updateLoading.value = false
+    }
+}
+
+async function hydrateAssignments(projectList: Project[]) {
+    if (!organizationId.value) return
+    const entries = await Promise.all(
+        projectList.map(async (project) => {
+            const assignments = await projectsApi.listAssignments(
+                organizationId.value,
+                project.id
+            )
+            return [project.id, assignments] as const
+        })
+    )
+    assignmentsByProject.value = Object.fromEntries(entries)
+}
+
+function buildMemberProjectSelections() {
+    const selections: Record<string, string[]> = {}
+    for (const member of members.value) {
+        selections[member.userId] = projects.value
+            .filter((project) =>
+                (assignmentsByProject.value[project.id] ?? []).some(
+                    (assignment) => assignment.userId === member.userId
+                )
+            )
+            .map((project) => project.id)
+    }
+    memberProjectSelection.value = selections
+}
+
+const assignedProjectNames = (member: OrganizationMember) => {
+    return projects.value
+        .filter((project) =>
+            (assignmentsByProject.value[project.id] ?? []).some(
+                (assignment) => assignment.userId === member.userId
+            )
+        )
+        .map((project) => project.name)
+}
+
+async function onMemberAssignmentsChange(member: OrganizationMember) {
+    if (!organizationId.value || !canManageAssignments.value) return
+    const selection = new Set(memberProjectSelection.value[member.userId] ?? [])
+    const currentAssigned = new Set(
+        projects.value
+            .filter((project) =>
+                (assignmentsByProject.value[project.id] ?? []).some(
+                    (assignment) => assignment.userId === member.userId
+                )
+            )
+            .map((project) => project.id)
+    )
+    const toAssign = [...selection].filter((projectId) => !currentAssigned.has(projectId))
+    const toUnassign = [...currentAssigned].filter((projectId) => !selection.has(projectId))
+
+    if (!toAssign.length && !toUnassign.length) return
+
+    assignmentSaving.value = { ...assignmentSaving.value, [member.userId]: true }
+    try {
+        for (const projectId of toAssign) {
+            await projectsApi.assignUser(organizationId.value, projectId, {
+                userId: member.userId,
+            })
+        }
+        for (const projectId of toUnassign) {
+            await projectsApi.unassignUser(organizationId.value, projectId, member.userId)
+        }
+        const refreshed = await Promise.all(
+            [...new Set([...toAssign, ...toUnassign])].map(async (projectId) => {
+                const assignments = await projectsApi.listAssignments(
+                    organizationId.value,
+                    projectId
+                )
+                return [projectId, assignments] as const
+            })
+        )
+        assignmentsByProject.value = {
+            ...assignmentsByProject.value,
+            ...Object.fromEntries(refreshed),
+        }
+        buildMemberProjectSelections()
+    } catch (e) {
+        console.error("Update member assignments error:", e)
+        error.value = toUiError(e)
+    } finally {
+        assignmentSaving.value = { ...assignmentSaving.value, [member.userId]: false }
     }
 }
 
@@ -299,6 +408,7 @@ const memberMeta = (member: OrganizationMember) =>
                             <th>Member</th>
                             <th>Role</th>
                             <th>Status</th>
+                            <th>Projects</th>
                             <th class="team-table__actions">Actions</th>
                         </tr>
                     </thead>
@@ -345,6 +455,44 @@ const memberMeta = (member: OrganizationMember) =>
                             </td>
                             <td>
                                 <span>{{ statusLabel(member) }}</span>
+                            </td>
+                            <td>
+                                <div class="assignment-summary">
+                                    <span v-if="assignedProjectNames(member).length">
+                                        {{ assignedProjectNames(member).join(", ") }}
+                                    </span>
+                                    <span v-else class="muted">No assignments</span>
+                                </div>
+                                <div v-if="canManageAssignments" class="assignment-controls">
+                                    <label
+                                        class="assignment-label"
+                                        :for="`member-assignments-${member.id}`"
+                                    >
+                                        Manage projects
+                                    </label>
+                                    <select
+                                        :id="`member-assignments-${member.id}`"
+                                        v-model="memberProjectSelection[member.userId]"
+                                        class="assignment-select"
+                                        multiple
+                                        :disabled="assignmentSaving[member.userId]"
+                                        @change="onMemberAssignmentsChange(member)"
+                                    >
+                                        <option
+                                            v-for="project in projects"
+                                            :key="project.id"
+                                            :value="project.id"
+                                        >
+                                            {{ project.name }}
+                                        </option>
+                                    </select>
+                                    <span
+                                        v-if="assignmentSaving[member.userId]"
+                                        class="assignment-saving"
+                                    >
+                                        Saving assignments…
+                                    </span>
+                                </div>
                             </td>
                             <td class="team-table__actions">
                                 <button
@@ -452,6 +600,35 @@ const memberMeta = (member: OrganizationMember) =>
 
 .team-table__actions {
     width: 120px;
+}
+
+.assignment-summary {
+    font-size: 0.875rem;
+    margin-bottom: var(--s-2);
+}
+
+.assignment-controls {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    min-width: 220px;
+}
+
+.assignment-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-3);
+    letter-spacing: 0.04em;
+}
+
+.assignment-select {
+    min-height: 110px;
+}
+
+.assignment-saving {
+    font-size: 0.8125rem;
+    color: var(--text-3);
 }
 
 .member-name {

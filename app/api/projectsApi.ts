@@ -11,6 +11,18 @@ export type Project = {
     [key: string]: unknown
 }
 
+export type ProjectAssignment = {
+    id: string
+    projectId: string
+    userId: string
+    assignedByUserId?: string
+    assignedAtUtc: string
+}
+
+export type AssignUserToProjectRequest = {
+    userId: string
+}
+
 export type CreateProjectRequest = {
     name: string
     clientId?: string
@@ -60,6 +72,34 @@ export const projectsApi = {
         return apiClient<Project>(
             `/v1/organizations/${organizationId}/projects/${projectId}`,
             { method: "PATCH", body: payload }
+        )
+    },
+
+    /** GET api/v1/organizations/{organizationId}/projects/{projectId}/assignments */
+    listAssignments(organizationId: string, projectId: string) {
+        return apiClient<ProjectAssignment[]>(
+            `/v1/organizations/${organizationId}/projects/${projectId}/assignments`,
+            { method: "GET" }
+        )
+    },
+
+    /** POST api/v1/organizations/{organizationId}/projects/{projectId}/assignments */
+    assignUser(
+        organizationId: string,
+        projectId: string,
+        payload: AssignUserToProjectRequest
+    ) {
+        return apiClient<ProjectAssignment>(
+            `/v1/organizations/${organizationId}/projects/${projectId}/assignments`,
+            { method: "POST", body: payload }
+        )
+    },
+
+    /** DELETE api/v1/organizations/{organizationId}/projects/{projectId}/assignments/{userId} */
+    unassignUser(organizationId: string, projectId: string, userId: string) {
+        return apiClient<void>(
+            `/v1/organizations/${organizationId}/projects/${projectId}/assignments/${userId}`,
+            { method: "DELETE" }
         )
     },
 }
