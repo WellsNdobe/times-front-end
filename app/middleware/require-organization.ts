@@ -3,9 +3,8 @@
 // the Nuxt process may not be able to reach apiBase (e.g. localhost from Docker).
 import { organizationsApi } from "~/api/organizationsApi"
 
-export default defineNuxtRouteMiddleware(async () => {
-    const route = useRoute()
-    if (route.path === "/onboarding/create-organization") return
+export default defineNuxtRouteMiddleware(async (to) => {
+    if (to.path === "/onboarding/create-organization") return
 
     if (process.server) return
 
