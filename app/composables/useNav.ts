@@ -1,5 +1,4 @@
-import { computed, onMounted, ref } from "vue"
-import { organizationsApi } from "~/api/organizationsApi"
+import { computed } from "vue"
 import { useAuth } from "~/composables/useAuth"
 
 export type NavItem = {
@@ -14,6 +13,7 @@ export type NavGroup = {
 }
 
 const employeeOnlyRoutes = new Set([
+    "/dashboard",
     "/track",
     "/timesheets",
     "/approvals",
@@ -59,24 +59,11 @@ const baseNav: NavGroup[] = [
 ]
 
 export function useNav() {
-    const { user } = useAuth()
-    const userRole = ref<number | null>(null)
-
-    onMounted(async () => {
-        if (!user.value?.userId) return
-        try {
-            const orgs = await organizationsApi.getMine()
-            if (!orgs?.length) return
-            const members = await organizationsApi.getMembers(orgs[0].id)
-            const member = members.find((item) => item.userId === user.value?.userId)
-            if (member) userRole.value = member.role
-        } catch (error) {
-            console.error("Failed to load user role for navigation:", error)
-        }
-    })
+    const { token } = useAuth()
 
     const nav = computed(() => {
-        if (userRole.value === 2) {
+        const role = getRoleFromToken(token.value)
+        if (role === "Employee") {
             return baseNav
                 .map((group) => ({
                     ...group,
@@ -88,4 +75,28 @@ export function useNav() {
     })
 
     return nav
+}
+
+function getRoleFromToken(token: string | null | undefined) {
+    if (!token) return null
+    const payload = decodeJwtPayload(token)
+    if (!payload || typeof payload !== "object") return null
+    const claimKey = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
+    const role = payload[claimKey]
+    return typeof role === "string" ? role : null
+}
+
+function decodeJwtPayload(token: string) {
+    const [, payload] = token.split(".")
+    if (!payload) return null
+    try {
+        if (typeof atob !== "function") return null
+        const normalized = payload.replace(/-/g, "+").replace(/_/g, "/")
+        const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")
+        const decoded = atob(padded)
+        return JSON.parse(decoded)
+    } catch (error) {
+        console.error("Failed to decode auth token payload:", error)
+        return null
+    }
 }
