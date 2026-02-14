@@ -43,11 +43,13 @@ async function loadTimesheet() {
         if (!org.value?.id) return
         const [projectsResult, timesheetResult] = await Promise.all([
             projectsApi.list(org.value.id),
-            ensureTimesheet(org.value.id, weekStartDate.value),
+            loadTimesheetForWeek(org.value.id, weekStartDate.value),
         ])
         projects.value = projectsResult
         timesheet.value = timesheetResult
-        entries.value = await loadEntries(org.value.id, timesheetResult.id)
+        entries.value = timesheetResult
+            ? await loadEntries(org.value.id, timesheetResult.id)
+            : []
     } catch (e) {
         console.error("Load timesheet error:", e)
         error.value = toUiError(e)
@@ -56,10 +58,9 @@ async function loadTimesheet() {
     }
 }
 
-async function ensureTimesheet(organizationId: string, weekStart: string) {
+async function loadTimesheetForWeek(organizationId: string, weekStart: string) {
     const existing = await timesheetsApi.list(organizationId, { weekStartDate: weekStart })
-    if (existing?.length) return existing[0]
-    return timesheetsApi.create(organizationId, { weekStartDate: weekStart })
+    return existing?.[0] ?? null
 }
 
 async function loadEntries(organizationId: string, timesheetId: string) {
