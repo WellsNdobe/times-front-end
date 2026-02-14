@@ -20,6 +20,21 @@ yarn install
 bun install
 ```
 
+
+### Backend API target
+
+The app proxies all `/api/*` requests during development. By default, it forwards to `http://127.0.0.1:5275`.
+
+If your API runs somewhere else (different port, Docker host, remote URL), set one or both env vars before `yarn dev`:
+
+```bash
+# Shared API origin used by dev proxies and runtime base URL
+export NUXT_API_ORIGIN=http://host.docker.internal:5275
+
+# Optional: override only the runtime API base (defaults to $NUXT_API_ORIGIN/api)
+export NUXT_PUBLIC_API_BASE=http://host.docker.internal:5275/api
+```
+
 ## Development Server
 
 Start the development server on `http://localhost:3000`:

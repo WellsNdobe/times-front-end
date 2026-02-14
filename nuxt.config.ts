@@ -1,23 +1,27 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
+const apiOrigin = process.env.NUXT_API_ORIGIN || 'http://127.0.0.1:5275'
+const normalizedApiOrigin = apiOrigin.replace(/\/$/, '')
+
 export default defineNuxtConfig({
     components: [
-    { path: '~/app/components', pathPrefix: false },
-],
-  compatibilityDate: '2025-07-15',
-  devtools: { enabled: true },
-  modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints', 'nuxt-icon'],
+        { path: '~/app/components', pathPrefix: false },
+    ],
+    compatibilityDate: '2025-07-15',
+    devtools: { enabled: true },
+    modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints', 'nuxt-icon'],
     css: [
-    '~/assets/styles/tokens.css',
-    '~/assets/styles/base.css'],
+        '~/assets/styles/tokens.css',
+        '~/assets/styles/base.css',
+    ],
     runtimeConfig: {
         public: {
-            apiBase: "http://localhost:5275/api",
+            apiBase: process.env.NUXT_PUBLIC_API_BASE || `${normalizedApiOrigin}/api`,
         },
     },
     nitro: {
         devProxy: {
-            "/api": {
-                target: "http://localhost:5275",
+            '/api': {
+                target: normalizedApiOrigin,
                 changeOrigin: true,
             },
         },
@@ -25,8 +29,8 @@ export default defineNuxtConfig({
     vite: {
         server: {
             proxy: {
-                "/api": {
-                    target: "http://localhost:5275",
+                '/api': {
+                    target: normalizedApiOrigin,
                     changeOrigin: true,
                 },
             },
