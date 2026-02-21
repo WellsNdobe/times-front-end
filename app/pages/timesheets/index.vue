@@ -26,9 +26,26 @@ const timesheet = ref<Timesheet | null>(null)
 const entries = ref<TimesheetEntryRow[]>([])
 const loading = ref(true)
 const error = ref<UiError | null>(null)
+const submitting = ref(false)
 
 const weekStartDate = ref(formatDateForInput(getWeekStart(new Date())))
 const weekLabel = computed(() => `Week of ${weekStartDate.value}`)
+const timesheetStatusLabel = computed(() => {
+    const status = timesheet.value?.status
+    if (status === 1) return "Submitted"
+    if (status === 2) return "Approved"
+    if (status === 3) return "Rejected"
+    return "Draft"
+})
+const isEditable = computed(() => {
+    const status = timesheet.value?.status
+    return status === undefined || status === 0 || status === 3
+})
+const canSubmit = computed(() => {
+    if (!timesheet.value?.id) return false
+    if (!isEditable.value) return false
+    return entries.value.length > 0
+})
 
 async function loadTimesheet() {
     loading.value = true
@@ -59,8 +76,12 @@ async function loadTimesheet() {
 }
 
 async function loadTimesheetForWeek(organizationId: string, weekStart: string) {
-    const existing = await timesheetsApi.list(organizationId, { weekStartDate: weekStart })
-    return existing?.[0] ?? null
+    const existing = await timesheetsApi.listMine(organizationId, {
+        fromWeekStart: weekStart,
+        toWeekStart: weekStart,
+    })
+    if (existing?.length) return existing[0]
+    return await timesheetsApi.create(organizationId, { weekStartDate: weekStart })
 }
 
 async function loadEntries(organizationId: string, timesheetId: string) {
@@ -174,6 +195,21 @@ function formatDateForInput(date: Date) {
     const day = String(date.getDate()).padStart(2, "0")
     return `${year}-${month}-${day}`
 }
+
+async function submitTimesheet() {
+    if (!org.value?.id || !timesheet.value?.id) return
+    if (!canSubmit.value) return
+    submitting.value = true
+    try {
+        const updated = await timesheetsApi.submit(org.value.id, timesheet.value.id)
+        timesheet.value = updated
+    } catch (e) {
+        console.error("Submit timesheet error:", e)
+        error.value = toUiError(e)
+    } finally {
+        submitting.value = false
+    }
+}
 </script>
 
 <template>
@@ -186,6 +222,7 @@ function formatDateForInput(date: Date) {
             <div class="timesheets__week">
                 <span class="timesheets__week-label">Week</span>
                 <span class="timesheets__week-date">{{ weekLabel }}</span>
+                <span class="timesheets__week-status">{{ timesheetStatusLabel }}</span>
             </div>
         </header>
 
@@ -203,10 +240,18 @@ function formatDateForInput(date: Date) {
                 <button
                     type="button"
                     class="btn btn-primary"
-                    :disabled="loading || !timesheet"
+                    :disabled="loading || !timesheet || !isEditable"
                     @click="addEntryRow"
                 >
                     Add row
+                </button>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    :disabled="loading || submitting || !canSubmit"
+                    @click="submitTimesheet"
+                >
+                    {{ submitting ? "Submitting…" : "Submit timesheet" }}
                 </button>
             </div>
 
@@ -226,7 +271,11 @@ function formatDateForInput(date: Date) {
                     <tbody>
                         <tr v-for="entry in entries" :key="entry.id">
                             <td>
-                                <select v-model="entry.projectId" class="table-select">
+                                <select
+                                    v-model="entry.projectId"
+                                    class="table-select"
+                                    :disabled="!isEditable"
+                                >
                                     <option value="">Select project</option>
                                     <option
                                         v-for="project in projects"
@@ -242,6 +291,7 @@ function formatDateForInput(date: Date) {
                                     v-model="entry.workDate"
                                     type="date"
                                     class="table-input"
+                                    :disabled="!isEditable"
                                 />
                             </td>
                             <td>
@@ -253,6 +303,7 @@ function formatDateForInput(date: Date) {
                                     min="0"
                                     step="1"
                                     placeholder="0"
+                                    :disabled="!isEditable"
                                 />
                             </td>
                             <td>
@@ -260,10 +311,16 @@ function formatDateForInput(date: Date) {
                                     v-model="entry.startTime"
                                     type="time"
                                     class="table-input"
+                                    :disabled="!isEditable"
                                 />
                             </td>
                             <td>
-                                <input v-model="entry.endTime" type="time" class="table-input" />
+                                <input
+                                    v-model="entry.endTime"
+                                    type="time"
+                                    class="table-input"
+                                    :disabled="!isEditable"
+                                />
                             </td>
                             <td>
                                 <input
@@ -271,6 +328,7 @@ function formatDateForInput(date: Date) {
                                     type="text"
                                     class="table-input"
                                     placeholder="Optional notes"
+                                    :disabled="!isEditable"
                                 />
                             </td>
                             <td class="timesheets-table__actions">
@@ -278,7 +336,7 @@ function formatDateForInput(date: Date) {
                                     <button
                                         type="button"
                                         class="btn btn-primary btn-sm"
-                                        :disabled="entry.isSaving || entry.isDeleting"
+                                        :disabled="!isEditable || entry.isSaving || entry.isDeleting"
                                         @click="saveEntry(entry)"
                                     >
                                         {{ entry.isSaving ? "Saving…" : entry.isNew ? "Add" : "Save" }}
@@ -286,7 +344,7 @@ function formatDateForInput(date: Date) {
                                     <button
                                         type="button"
                                         class="btn btn-secondary btn-sm"
-                                        :disabled="entry.isDeleting || entry.isSaving"
+                                        :disabled="!isEditable || entry.isDeleting || entry.isSaving"
                                         @click="deleteEntry(entry)"
                                     >
                                         {{ entry.isDeleting ? "Removing…" : "Delete" }}
@@ -349,9 +407,15 @@ function formatDateForInput(date: Date) {
     font-weight: 600;
 }
 
+.timesheets__week-status {
+    font-size: 0.8rem;
+    color: var(--text-2);
+}
+
 .timesheets__toolbar {
     display: flex;
     justify-content: flex-end;
+    gap: var(--s-2);
     margin-bottom: var(--s-3);
 }
 
