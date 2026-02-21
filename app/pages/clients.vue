@@ -42,7 +42,9 @@ async function loadClients() {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
-        org.value = orgs[0]
+        const firstOrg = orgs[0]
+        if (!firstOrg) return
+        org.value = firstOrg
         if (!org.value?.id) return
         clients.value = await clientsApi.list(org.value.id)
     } catch (e) {

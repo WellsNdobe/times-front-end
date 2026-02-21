@@ -50,7 +50,9 @@ async function loadProjects() {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
-        org.value = orgs[0]
+        const firstOrg = orgs[0]
+        if (!firstOrg) return
+        org.value = firstOrg
         if (org.value?.id) {
             const [projectsResult, clientsResult] = await Promise.all([
                 projectsApi.list(org.value.id, listParams.value),

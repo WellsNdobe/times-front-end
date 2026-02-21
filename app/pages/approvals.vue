@@ -77,7 +77,9 @@ async function loadApprovals() {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
-        org.value = orgs[0]
+        const firstOrg = orgs[0]
+        if (!firstOrg) return
+        org.value = firstOrg
         if (!org.value?.id) return
         const [membersResult, approvalsResult, mineResult] = await Promise.all([
             organizationsApi.getMembers(org.value.id),
