@@ -2,6 +2,7 @@
 definePageMeta({ middleware: ["auth", "require-organization"] })
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { useRoute } from "vue-router"
 import { organizationsApi, type Organization } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
@@ -9,6 +10,7 @@ import { timesheetEntriesApi, type TimesheetEntry } from "~/api/timesheetEntries
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
 const org = ref<Organization | null>(null)
+const route = useRoute()
 const projects = ref<Project[]>([])
 const timesheet = ref<Timesheet | null>(null)
 const entries = ref<TimesheetEntry[]>([])
@@ -69,6 +71,14 @@ watch(workDate, async (value, previous) => {
     await ensureTimesheetForSelectedWeek()
 })
 
+watch(
+    () => [route.query.date, route.query.projectId],
+    async () => {
+        applyQueryPrefill()
+        await ensureTimesheetForSelectedWeek()
+    }
+)
+
 async function loadTrackerData() {
     loading.value = true
     error.value = null
@@ -93,6 +103,7 @@ async function loadTrackerData() {
             ? await timesheetEntriesApi.list(org.value.id, timesheetResult.id)
             : []
 
+        applyQueryPrefill()
         if (!selectedProjectId.value && activeProjects.value.length) {
             selectedProjectId.value = activeProjects.value[0].id
         }
@@ -101,6 +112,20 @@ async function loadTrackerData() {
         error.value = toUiError(e)
     } finally {
         loading.value = false
+    }
+}
+
+function applyQueryPrefill() {
+    const rawDate = route.query.date
+    const queryDate = typeof rawDate === "string" ? rawDate : ""
+    if (/^\d{4}-\d{2}-\d{2}$/.test(queryDate)) {
+        workDate.value = queryDate
+    }
+
+    const rawProjectId = route.query.projectId
+    const queryProjectId = typeof rawProjectId === "string" ? rawProjectId : ""
+    if (queryProjectId && projects.value.some((project) => project.id === queryProjectId)) {
+        selectedProjectId.value = queryProjectId
     }
 }
 
