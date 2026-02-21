@@ -78,7 +78,9 @@ async function loadTrackerData() {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
-        org.value = orgs[0]
+        const firstOrg = orgs[0]
+        if (!firstOrg) return
+        org.value = firstOrg
         if (!org.value?.id) return
 
         const [projectsResult, timesheetResult] = await Promise.all([
@@ -432,17 +434,17 @@ function formatMinutes(total: number) {
                     </thead>
                     <tbody>
                         <tr v-for="entry in todayEntries" :key="entry.id">
-                            <td>{{ projectNameById(entry.projectId) }}</td>
-                            <td>
+                            <td data-label="Project">{{ projectNameById(entry.projectId) }}</td>
+                            <td data-label="Time">
                                 {{
                                     entry.startTime && entry.endTime
                                         ? `${entry.startTime} - ${entry.endTime}`
                                         : "Manual"
                                 }}
                             </td>
-                            <td>{{ formatMinutes(entry.durationMinutes ?? 0) }}</td>
-                            <td>{{ entry.notes || "N/A" }}</td>
-                            <td class="track-table__actions">
+                            <td data-label="Duration">{{ formatMinutes(entry.durationMinutes ?? 0) }}</td>
+                            <td data-label="Notes">{{ entry.notes || "N/A" }}</td>
+                            <td class="track-table__actions" data-label="Actions">
                                 <button
                                     type="button"
                                     class="btn btn-secondary btn-sm"
@@ -599,6 +601,7 @@ function formatMinutes(total: number) {
 .track-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
 }
 
 .track-table th,
@@ -614,6 +617,10 @@ function formatMinutes(total: number) {
     color: var(--text-3);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+}
+
+.track-table td {
+    word-break: break-word;
 }
 
 .track-table__actions {
@@ -641,6 +648,53 @@ function formatMinutes(total: number) {
 
     .track__controls {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 760px) {
+    .track-table,
+    .track-table thead,
+    .track-table tbody,
+    .track-table tr,
+    .track-table th,
+    .track-table td {
+        display: block;
+    }
+
+    .track-table thead {
+        display: none;
+    }
+
+    .track-table tbody {
+        display: grid;
+        gap: var(--s-2);
+    }
+
+    .track-table tr {
+        border: 1px solid var(--border);
+        border-radius: var(--r-sm);
+        padding: var(--s-2);
+        background: var(--surface);
+    }
+
+    .track-table td {
+        border: 0;
+        padding: var(--s-1) 0;
+    }
+
+    .track-table td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.75rem;
+        color: var(--text-3);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 700;
+        margin-bottom: 2px;
+    }
+
+    .track-table__actions {
+        width: auto;
     }
 }
 </style>

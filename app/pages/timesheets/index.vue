@@ -70,7 +70,9 @@ async function loadTimesheet() {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
-        org.value = orgs[0]
+        const firstOrg = orgs[0]
+        if (!firstOrg) return
+        org.value = firstOrg
         if (!org.value?.id) return
         const [projectsResult, timesheetResult] = await Promise.all([
             projectsApi.list(org.value.id),
@@ -284,7 +286,7 @@ async function submitTimesheet() {
                     </thead>
                     <tbody>
                         <tr v-for="entry in entries" :key="entry.id">
-                            <td>
+                            <td data-label="Project">
                                 <select
                                     v-model="entry.projectId"
                                     class="table-select"
@@ -300,7 +302,7 @@ async function submitTimesheet() {
                                     </option>
                                 </select>
                             </td>
-                            <td>
+                            <td data-label="Work date">
                                 <input
                                     v-model="entry.workDate"
                                     type="date"
@@ -308,7 +310,7 @@ async function submitTimesheet() {
                                     :disabled="!isEditable"
                                 />
                             </td>
-                            <td>
+                            <td data-label="Duration (min)">
                                 <input
                                     :value="entry.durationMinutes ?? ''"
                                     type="number"
@@ -320,7 +322,7 @@ async function submitTimesheet() {
                                     :disabled="!isEditable"
                                 />
                             </td>
-                            <td>
+                            <td data-label="Start">
                                 <input
                                     v-model="entry.startTime"
                                     type="time"
@@ -328,7 +330,7 @@ async function submitTimesheet() {
                                     :disabled="!isEditable"
                                 />
                             </td>
-                            <td>
+                            <td data-label="End">
                                 <input
                                     v-model="entry.endTime"
                                     type="time"
@@ -336,7 +338,7 @@ async function submitTimesheet() {
                                     :disabled="!isEditable"
                                 />
                             </td>
-                            <td>
+                            <td data-label="Notes">
                                 <input
                                     v-model="entry.notes"
                                     type="text"
@@ -345,7 +347,7 @@ async function submitTimesheet() {
                                     :disabled="!isEditable"
                                 />
                             </td>
-                            <td class="timesheets-table__actions">
+                            <td class="timesheets-table__actions" data-label="Actions">
                                 <div class="timesheets__row-actions">
                                     <button
                                         type="button"
@@ -443,6 +445,7 @@ async function submitTimesheet() {
 .timesheets-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
 }
 
 .timesheets-table th,
@@ -451,6 +454,10 @@ async function submitTimesheet() {
     text-align: left;
     border-bottom: 1px solid var(--border);
     vertical-align: top;
+}
+
+.timesheets-table td {
+    word-break: break-word;
 }
 
 .timesheets-table th {
@@ -467,7 +474,8 @@ async function submitTimesheet() {
 
 .table-input,
 .table-select {
-    min-width: 130px;
+    min-width: 0;
+    width: 100%;
 }
 
 .timesheets__row-actions {
@@ -506,6 +514,53 @@ async function submitTimesheet() {
 .muted {
     margin: 0;
     color: var(--text-2);
+}
+
+@media (max-width: 900px) {
+    .timesheets-table,
+    .timesheets-table thead,
+    .timesheets-table tbody,
+    .timesheets-table tr,
+    .timesheets-table th,
+    .timesheets-table td {
+        display: block;
+    }
+
+    .timesheets-table thead {
+        display: none;
+    }
+
+    .timesheets-table tbody {
+        display: grid;
+        gap: var(--s-2);
+    }
+
+    .timesheets-table tr {
+        border: 1px solid var(--border);
+        border-radius: var(--r-sm);
+        background: var(--surface);
+        padding: var(--s-2) var(--s-3);
+    }
+
+    .timesheets-table td {
+        border: 0;
+        padding: var(--s-1) 0;
+    }
+
+    .timesheets-table td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-3);
+        margin-bottom: 2px;
+    }
+
+    .timesheets-table__actions {
+        width: auto;
+    }
 }
 </style>
 
