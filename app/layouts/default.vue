@@ -5,6 +5,7 @@
         :collapsed="isCollapsed"
         :mobileOpen="isMobileOpen"
         :currentPath="route.path"
+        :approvalsPendingCount="approvalsPendingCount"
         @collapse="collapseSidebar"
         @logo-click="onLogoClick"
         @close-mobile="isMobileOpen = false"
@@ -22,9 +23,11 @@
 
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useNav } from '~/composables/useNav'
+import { organizationsApi } from '~/api/organizationsApi'
+import { timesheetsApi } from '~/api/timesheetsApi'
 
 import AppSidebar from '~/components/shell/Sidebar.vue'
 import AppTopbar from '~/components/shell/Topbar.vue'
@@ -36,6 +39,7 @@ const nav = useNav()
 const isCollapsed = ref(false)
 const isMobileOpen = ref(false)
 const isMobile = ref(false)
+const approvalsPendingCount = ref(0)
 
 function updateIsMobile() {
   isMobile.value = window.matchMedia('(max-width: 960px)').matches
@@ -45,11 +49,19 @@ function updateIsMobile() {
 onMounted(() => {
   updateIsMobile()
   window.addEventListener('resize', updateIsMobile)
+  loadApprovalsPendingCount()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateIsMobile)
 })
+
+watch(
+    () => route.fullPath,
+    () => {
+      loadApprovalsPendingCount()
+    }
+)
 
 function collapseSidebar() {
   isCollapsed.value = true
@@ -62,6 +74,28 @@ function onLogoClick() {
 
 function openMobileSidebar() {
   if (isMobile.value) isMobileOpen.value = true
+}
+
+async function loadApprovalsPendingCount() {
+  const hasApprovalsNav = nav.value.some((group) =>
+      group.items.some((item) => item.to === '/approvals')
+  )
+  if (!hasApprovalsNav) {
+    approvalsPendingCount.value = 0
+    return
+  }
+  try {
+    const orgs = await organizationsApi.getMine()
+    const orgId = orgs?.[0]?.id
+    if (!orgId) {
+      approvalsPendingCount.value = 0
+      return
+    }
+    const pending = await timesheetsApi.listPendingApproval(orgId)
+    approvalsPendingCount.value = pending.length
+  } catch {
+    approvalsPendingCount.value = 0
+  }
 }
 
 const pageTitle = computed(() => {

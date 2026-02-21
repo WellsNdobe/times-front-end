@@ -3,6 +3,7 @@ definePageMeta({ middleware: ["auth", "require-organization"] })
 
 import { ref, computed, onMounted } from "vue"
 import { organizationsApi, type Organization } from "~/api/organizationsApi"
+import { clientsApi, type Client } from "~/api/clientsApi"
 import {
     projectsApi,
     type Project,
@@ -12,19 +13,24 @@ import {
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
 const org = ref<Organization | null>(null)
+const clients = ref<Client[]>([])
 const projects = ref<Project[]>([])
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 
 const filterActive = ref<boolean | "all">("all")
 
-const addForm = ref({ name: "", isActive: true })
+const addForm = ref({ name: "", clientId: "", isActive: true })
 const addLoading = ref(false)
 const addError = ref<UiError | null>(null)
 const showAddForm = ref(false)
 
 const editingProjectId = ref<string | null>(null)
-const editForm = ref<{ name: string; isActive: boolean }>({ name: "", isActive: true })
+const editForm = ref<{ name: string; clientId: string; isActive: boolean }>({
+    name: "",
+    clientId: "",
+    isActive: true,
+})
 const updateLoading = ref(false)
 const updateError = ref<UiError | null>(null)
 
@@ -46,7 +52,12 @@ async function loadProjects() {
         }
         org.value = orgs[0]
         if (org.value?.id) {
-            projects.value = await projectsApi.list(org.value.id, listParams.value)
+            const [projectsResult, clientsResult] = await Promise.all([
+                projectsApi.list(org.value.id, listParams.value),
+                clientsApi.list(org.value.id),
+            ])
+            projects.value = projectsResult
+            clients.value = clientsResult
         }
     } catch (e) {
         console.error("Load projects error:", e)
@@ -77,11 +88,12 @@ async function onAddProject() {
     try {
         const payload: CreateProjectRequest = {
             name: addForm.value.name.trim(),
+            clientId: addForm.value.clientId || undefined,
             isActive: addForm.value.isActive,
         }
         await projectsApi.create(organizationId.value, payload)
         await loadProjects()
-        addForm.value = { name: "", isActive: true }
+        addForm.value = { name: "", clientId: "", isActive: true }
         showAddForm.value = false
     } catch (e) {
         console.error("Create project error:", e)
@@ -95,6 +107,7 @@ function startEdit(project: Project) {
     editingProjectId.value = project.id
     editForm.value = {
         name: (project.name as string) ?? "",
+        clientId: (project.clientId as string) ?? "",
         isActive: project.isActive !== false,
     }
     updateError.value = null
@@ -112,6 +125,7 @@ async function onUpdateProject() {
     try {
         const payload: UpdateProjectRequest = {
             name: editForm.value.name.trim() || undefined,
+            clientId: editForm.value.clientId || undefined,
             isActive: editForm.value.isActive,
         }
         await projectsApi.update(organizationId.value, editingProjectId.value, payload)
@@ -123,6 +137,13 @@ async function onUpdateProject() {
     } finally {
         updateLoading.value = false
     }
+}
+
+function clientName(project: Project) {
+    if (project.clientName) return project.clientName
+    if (!project.clientId) return "Unassigned"
+    const client = clients.value.find((c) => c.id === project.clientId)
+    return client?.name ?? "Unassigned"
 }
 </script>
 
@@ -178,6 +199,15 @@ async function onUpdateProject() {
                             autocomplete="off"
                         />
                     </label>
+                    <label class="form-field">
+                        <span class="form-field__label">Client</span>
+                        <select v-model="addForm.clientId">
+                            <option value="">Unassigned</option>
+                            <option v-for="client in clients" :key="client.id" :value="client.id">
+                                {{ client.name }}
+                            </option>
+                        </select>
+                    </label>
                     <label class="form-field form-field--checkbox">
                         <input v-model="addForm.isActive" type="checkbox" />
                         <span class="form-field__label">Active</span>
@@ -197,6 +227,7 @@ async function onUpdateProject() {
                     <thead>
                         <tr>
                             <th>Name</th>
+                            <th>Client</th>
                             <th>Status</th>
                             <th class="projects-table__actions">Actions</th>
                         </tr>
@@ -214,6 +245,21 @@ async function onUpdateProject() {
                                     />
                                 </template>
                                 <span v-else class="project-name">{{ project.name }}</span>
+                            </td>
+                            <td>
+                                <template v-if="editingProjectId === project.id">
+                                    <select v-model="editForm.clientId" class="edit-input">
+                                        <option value="">Unassigned</option>
+                                        <option
+                                            v-for="client in clients"
+                                            :key="client.id"
+                                            :value="client.id"
+                                        >
+                                            {{ client.name }}
+                                        </option>
+                                    </select>
+                                </template>
+                                <span v-else>{{ clientName(project) }}</span>
                             </td>
                             <td>
                                 <template v-if="editingProjectId === project.id">

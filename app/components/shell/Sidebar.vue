@@ -50,10 +50,17 @@
             :data-tooltip="collapsed ? item.label : null"
             @click="$emit('close-mobile')"
         >
-  <span class="nav-item__icon" aria-hidden="true">
-    <Icon :name="item.icon" size="30" />
-  </span>
+          <span class="nav-item__icon" aria-hidden="true">
+            <Icon :name="item.icon" size="30" />
+          </span>
           <span class="nav-item__label" v-if="!collapsed">{{ item.label }}</span>
+          <span
+              v-if="item.to === '/approvals' && approvalsPendingCount > 0"
+              class="nav-item__badge"
+              :aria-label="`${approvalsPendingCount} approvals awaiting action`"
+          >
+            {{ approvalsPendingCount }}
+          </span>
         </NuxtLink>
 
       </div>
@@ -101,6 +108,7 @@ const props = defineProps<{
   collapsed: boolean
   mobileOpen: boolean
   currentPath: string
+  approvalsPendingCount: number
 }>()
 
 const emit = defineEmits<{
@@ -232,6 +240,20 @@ async function onLogoutClick() {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.nav-item__badge {
+  margin-left: auto;
+  min-width: 20px;
+  height: 20px;
+  border-radius: var(--r-pill);
+  background: #e67e22;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  padding: 0 6px;
 }
 
 /* Footer actions */
