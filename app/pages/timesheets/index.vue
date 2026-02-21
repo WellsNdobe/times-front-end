@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 definePageMeta({ middleware: ["auth", "require-organization"] })
 
 import { ref, computed, onMounted } from "vue"
@@ -36,6 +36,20 @@ const timesheetStatusLabel = computed(() => {
     if (status === 2) return "Approved"
     if (status === 3) return "Rejected"
     return "Draft"
+})
+const submitButtonLabel = computed(() => {
+    if (submitting.value) return "Submitting..."
+    const status = timesheet.value?.status
+    if (status === 1) return "Submitted"
+    if (status === 2) return "Approved"
+    if (status === 3) return "Update"
+    return "Submit timesheet"
+})
+const showRejectionBanner = computed(() => timesheet.value?.status === 3)
+const rejectionReason = computed(() => {
+    const reason = timesheet.value?.rejectionReason
+    if (typeof reason === "string" && reason.trim().length) return reason.trim()
+    return "No rejection reason was provided."
 })
 const isEditable = computed(() => {
     const status = timesheet.value?.status
@@ -232,7 +246,7 @@ async function submitTimesheet() {
         </div>
 
         <template v-else-if="loading && !entries.length">
-            <p class="muted">Loading timesheet…</p>
+            <p class="muted">Loading timesheetâ€¦</p>
         </template>
 
         <template v-else>
@@ -251,7 +265,7 @@ async function submitTimesheet() {
                     :disabled="loading || submitting || !canSubmit"
                     @click="submitTimesheet"
                 >
-                    {{ submitting ? "Submitting…" : "Submit timesheet" }}
+                    {{ submitButtonLabel }}
                 </button>
             </div>
 
@@ -339,7 +353,7 @@ async function submitTimesheet() {
                                         :disabled="!isEditable || entry.isSaving || entry.isDeleting"
                                         @click="saveEntry(entry)"
                                     >
-                                        {{ entry.isSaving ? "Saving…" : entry.isNew ? "Add" : "Save" }}
+                                        {{ entry.isSaving ? "Savingâ€¦" : entry.isNew ? "Add" : "Save" }}
                                     </button>
                                     <button
                                         type="button"
@@ -347,7 +361,7 @@ async function submitTimesheet() {
                                         :disabled="!isEditable || entry.isDeleting || entry.isSaving"
                                         @click="deleteEntry(entry)"
                                     >
-                                        {{ entry.isDeleting ? "Removing…" : "Delete" }}
+                                        {{ entry.isDeleting ? "Removingâ€¦" : "Delete" }}
                                     </button>
                                 </div>
                                 <div v-if="entry.error" class="alert alert--inline">
@@ -358,6 +372,9 @@ async function submitTimesheet() {
                     </tbody>
                 </table>
                 <p v-else class="muted">No entries yet. Add your first row.</p>
+                <div v-if="showRejectionBanner" class="timesheets__rejection-banner" role="status">
+                    <strong>Rejected:</strong> {{ rejectionReason }}
+                </div>
             </div>
         </template>
     </section>
@@ -464,6 +481,22 @@ async function submitTimesheet() {
     font-size: 0.875rem;
 }
 
+.timesheets :deep(.btn:disabled) {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.timesheets__rejection-banner {
+    margin-top: 0;
+    border: 1px solid #f0b46c;
+    border-top: 0;
+    border-radius: 0 0 var(--r-md) var(--r-md);
+    padding: var(--s-3) var(--s-4);
+    background: #fff1df;
+    color: #8d4e07;
+    font-size: 0.95rem;
+}
+
 .alert--inline {
     margin-top: var(--s-2);
     padding: var(--s-2);
@@ -475,3 +508,4 @@ async function submitTimesheet() {
     color: var(--text-2);
 }
 </style>
+

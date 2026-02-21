@@ -89,6 +89,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from "vue"
 import { useAuth } from "~/composables/useAuth"
+import { organizationsApi } from "~/api/organizationsApi"
 
 defineProps<{
   title: string
@@ -100,7 +101,11 @@ defineEmits<{
 
 const { user } = useAuth()
 const userRole = "Project Lead"
-const userName = computed(() => user.value?.email ?? "Unknown User")
+const resolvedUserName = ref<string | null>(null)
+const userName = computed(() => {
+  if (resolvedUserName.value) return resolvedUserName.value
+  return "Unknown User"
+})
 
 const avatarUrl = computed(
     () =>
@@ -174,12 +179,29 @@ function handleDocClick(event: MouseEvent) {
 }
 
 onMounted(() => {
+  loadUserName()
   document.addEventListener("mousedown", handleDocClick)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", handleDocClick)
 })
+
+async function loadUserName() {
+  if (!user.value?.userId) return
+  try {
+    const orgs = await organizationsApi.getMine()
+    const orgId = orgs?.[0]?.id
+    if (!orgId) return
+    const members = await organizationsApi.getMembers(orgId)
+    const me = members.find((member) => member.userId === user.value?.userId)
+    if (!me) return
+    const fullName = [me.firstName, me.lastName].filter(Boolean).join(" ").trim()
+    if (fullName) resolvedUserName.value = fullName
+  } catch (error) {
+    console.error("Failed to load user display name:", error)
+  }
+}
 </script>
 
 <style scoped>

@@ -11,6 +11,7 @@ export type Timesheet = {
     submittedAtUtc?: string
     totalMinutes?: number
     totalHours?: number
+    rejectionReason?: string | null
     createdAtUtc?: string
     updatedAtUtc?: string
     [key: string]: unknown

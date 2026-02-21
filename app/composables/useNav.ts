@@ -16,7 +16,6 @@ const employeeOnlyRoutes = new Set([
     "/dashboard",
     "/track",
     "/timesheets",
-    "/approvals",
     "/projects",
     "/profile",
 ])
