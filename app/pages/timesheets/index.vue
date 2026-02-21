@@ -27,10 +27,15 @@ const entries = ref<TimesheetEntryRow[]>([])
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 const submitting = ref(false)
+const creatingTimesheet = ref(false)
 
 const weekStartDate = ref(formatDateForInput(getWeekStart(new Date())))
 const weekLabel = computed(() => `Week of ${weekStartDate.value}`)
+const isCurrentWeek = computed(
+    () => weekStartDate.value === formatDateForInput(getWeekStart(new Date()))
+)
 const timesheetStatusLabel = computed(() => {
+    if (!timesheet.value?.id) return "Not created"
     const status = timesheet.value?.status
     if (status === 1) return "Submitted"
     if (status === 2) return "Approved"
@@ -74,15 +79,9 @@ async function loadTimesheet() {
         if (!firstOrg) return
         org.value = firstOrg
         if (!org.value?.id) return
-        const [projectsResult, timesheetResult] = await Promise.all([
-            projectsApi.list(org.value.id),
-            loadTimesheetForWeek(org.value.id, weekStartDate.value),
-        ])
+        const projectsResult = await projectsApi.list(org.value.id)
         projects.value = projectsResult
-        timesheet.value = timesheetResult
-        entries.value = timesheetResult
-            ? await loadEntries(org.value.id, timesheetResult.id)
-            : []
+        await loadSelectedWeek()
     } catch (e) {
         console.error("Load timesheet error:", e)
         error.value = toUiError(e)
@@ -91,13 +90,58 @@ async function loadTimesheet() {
     }
 }
 
-async function loadTimesheetForWeek(organizationId: string, weekStart: string) {
+async function getTimesheetForWeek(organizationId: string, weekStart: string) {
     const existing = await timesheetsApi.listMine(organizationId, {
         fromWeekStart: weekStart,
         toWeekStart: weekStart,
     })
-    if (existing?.length) return existing[0]
-    return await timesheetsApi.create(organizationId, { weekStartDate: weekStart })
+    return existing?.[0] ?? null
+}
+
+async function loadSelectedWeek() {
+    if (!org.value?.id) return
+    loading.value = true
+    error.value = null
+    try {
+        const timesheetResult = await getTimesheetForWeek(org.value.id, weekStartDate.value)
+        timesheet.value = timesheetResult
+        entries.value = timesheetResult ? await loadEntries(org.value.id, timesheetResult.id) : []
+    } catch (e) {
+        console.error("Load selected week error:", e)
+        error.value = toUiError(e)
+    } finally {
+        loading.value = false
+    }
+}
+
+function moveWeek(offset: number) {
+    const current = new Date(weekStartDate.value)
+    current.setDate(current.getDate() + offset * 7)
+    weekStartDate.value = formatDateForInput(getWeekStart(current))
+    loadSelectedWeek()
+}
+
+function goToCurrentWeek() {
+    if (isCurrentWeek.value) return
+    weekStartDate.value = formatDateForInput(getWeekStart(new Date()))
+    loadSelectedWeek()
+}
+
+async function createTimesheetForSelectedWeek() {
+    if (!org.value?.id || timesheet.value?.id) return
+    creatingTimesheet.value = true
+    error.value = null
+    try {
+        timesheet.value = await timesheetsApi.create(org.value.id, {
+            weekStartDate: weekStartDate.value,
+        })
+        entries.value = []
+    } catch (e) {
+        console.error("Create timesheet error:", e)
+        error.value = toUiError(e)
+    } finally {
+        creatingTimesheet.value = false
+    }
 }
 
 async function loadEntries(organizationId: string, timesheetId: string) {
@@ -106,6 +150,7 @@ async function loadEntries(organizationId: string, timesheetId: string) {
 }
 
 function addEntryRow() {
+    if (!timesheet.value?.id) return
     const draft: TimesheetEntryRow = {
         id: `new-${Date.now()}`,
         isNew: true,
@@ -239,6 +284,22 @@ async function submitTimesheet() {
                 <span class="timesheets__week-label">Week</span>
                 <span class="timesheets__week-date">{{ weekLabel }}</span>
                 <span class="timesheets__week-status">{{ timesheetStatusLabel }}</span>
+                <div class="timesheets__week-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(-1)">
+                        Previous
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        :disabled="isCurrentWeek"
+                        @click="goToCurrentWeek"
+                    >
+                        This week
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(1)">
+                        Next
+                    </button>
+                </div>
             </div>
         </header>
 
@@ -271,7 +332,21 @@ async function submitTimesheet() {
                 </button>
             </div>
 
-            <div class="timesheets__table-wrap">
+            <div v-if="!timesheet" class="timesheets__empty-week">
+                <p class="muted">
+                    No timesheet exists for this week yet. Create one to start entering hours.
+                </p>
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    :disabled="creatingTimesheet || loading"
+                    @click="createTimesheetForSelectedWeek"
+                >
+                    {{ creatingTimesheet ? "Creating..." : "Create timesheet" }}
+                </button>
+            </div>
+
+            <div v-else class="timesheets__table-wrap">
                 <table class="timesheets-table" v-if="entries.length">
                     <thead>
                         <tr>
@@ -431,11 +506,29 @@ async function submitTimesheet() {
     color: var(--text-2);
 }
 
+.timesheets__week-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--s-2);
+    margin-top: var(--s-2);
+}
+
 .timesheets__toolbar {
     display: flex;
     justify-content: flex-end;
     gap: var(--s-2);
     margin-bottom: var(--s-3);
+}
+
+.timesheets__empty-week {
+    border: 1px dashed var(--border);
+    border-radius: var(--r-md);
+    padding: var(--s-4);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s-3);
 }
 
 .timesheets__table-wrap {
@@ -517,6 +610,15 @@ async function submitTimesheet() {
 }
 
 @media (max-width: 900px) {
+    .timesheets__week {
+        text-align: left;
+    }
+
+    .timesheets__week-actions {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
     .timesheets-table,
     .timesheets-table thead,
     .timesheets-table tbody,
