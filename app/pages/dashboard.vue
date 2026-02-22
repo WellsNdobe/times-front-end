@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ middleware: ["auth", "require-organization"] })
+definePageMeta({ middleware: ["auth", "require-organization", "manager-only"] })
 
 import { computed, onMounted, ref, watch } from "vue"
 import { useAuth } from "~/composables/useAuth"

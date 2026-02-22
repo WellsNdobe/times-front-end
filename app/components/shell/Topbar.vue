@@ -39,13 +39,13 @@
             </button>
           </div>
 
-          <div v-if="notifications.length === 0" class="menu__empty">
+          <div v-if="uiNotifications.length === 0" class="menu__empty">
             You're all caught up. Check back later.
           </div>
 
           <ul v-else class="menu__list">
             <li
-                v-for="n in notifications"
+                v-for="n in uiNotifications"
                 :key="n.id"
                 class="menu__item"
                 :class="{ 'menu__item--unread': !n.read }"
@@ -90,6 +90,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from "vue"
 import { useAuth } from "~/composables/useAuth"
 import { organizationsApi } from "~/api/organizationsApi"
+import { notificationsApi, type Notification as ApiNotification } from "~/api/notificationsApi"
 
 defineProps<{
   title: string
@@ -114,11 +115,12 @@ const avatarUrl = computed(
         )}`
 )
 
-/* Notifications demo state */
+/* Notifications */
 const isNotifOpen = ref(false)
 const menuRef = ref<HTMLElement | null>(null)
+const organizationId = ref<string | null>(null)
 
-type Notif = {
+type UiNotif = {
   id: string
   title: string
   desc: string
@@ -128,46 +130,48 @@ type Notif = {
   read?: boolean
 }
 
-const notifications = ref<Notif[]>([
-  {
-    id: "1",
-    title: "Timesheet approved",
-    desc: "Nice work! Your Jan 29 entry was approved.",
-    meta: "2 hours ago",
-    icon: "mdi:check-circle-outline",
-    tone: "success",
-    read: false
-  },
-  {
-    id: "2",
-    title: "Reminder: submit timesheet",
-    desc: "Friday is close. Log hours to avoid delays.",
-    meta: "Yesterday",
-    icon: "mdi:clock-outline",
-    tone: "warning",
-    read: false
-  },
-  {
-    id: "3",
-    title: "New comment on Project Atlas",
-    desc: "Thabo: “Looks good. Let’s ship this.”",
-    meta: "Jan 29",
-    icon: "mdi:message-text-outline",
-    tone: "info",
-    read: true
-  }
-])
+const notifications = ref<ApiNotification[]>([])
+
+const uiNotifications = computed<UiNotif[]>(() =>
+  notifications.value.map((n) => {
+    const ui = mapNotification(n.type)
+    return {
+      id: n.id,
+      title: n.title,
+      desc: n.message,
+      meta: formatRelativeTime(n.createdAtUtc),
+      icon: ui.icon,
+      tone: ui.tone,
+      read: n.isRead
+    }
+  })
+)
 
 const notifCount = computed(
-    () => notifications.value.filter(n => !n.read).length
+    () => notifications.value.filter(n => !n.isRead).length
 )
 
 function toggleNotif() {
   isNotifOpen.value = !isNotifOpen.value
+  if (isNotifOpen.value) {
+    void loadNotifications()
+  }
 }
 
-function markAllRead() {
-  notifications.value.forEach(n => (n.read = true))
+async function markAllRead() {
+  const orgId = await ensureOrganizationId()
+  if (!orgId) return
+  try {
+    await notificationsApi.markAllRead(orgId)
+    const now = new Date().toISOString()
+    notifications.value = notifications.value.map((n) => ({
+      ...n,
+      isRead: true,
+      readAtUtc: n.readAtUtc ?? now,
+    }))
+  } catch (error) {
+    console.error("Failed to mark notifications read:", error)
+  }
 }
 
 function handleDocClick(event: MouseEvent) {
@@ -180,6 +184,7 @@ function handleDocClick(event: MouseEvent) {
 
 onMounted(() => {
   loadUserName()
+  loadNotifications()
   document.addEventListener("mousedown", handleDocClick)
 })
 
@@ -190,8 +195,7 @@ onBeforeUnmount(() => {
 async function loadUserName() {
   if (!user.value?.userId) return
   try {
-    const orgs = await organizationsApi.getMine()
-    const orgId = orgs?.[0]?.id
+    const orgId = await ensureOrganizationId()
     if (!orgId) return
     const members = await organizationsApi.getMembers(orgId)
     const me = members.find((member) => member.userId === user.value?.userId)
@@ -201,6 +205,58 @@ async function loadUserName() {
   } catch (error) {
     console.error("Failed to load user display name:", error)
   }
+}
+
+async function loadNotifications() {
+  const orgId = await ensureOrganizationId()
+  if (!orgId) return
+  try {
+    await notificationsApi.createReminder(orgId)
+    notifications.value = await notificationsApi.list(orgId, { take: 25 })
+  } catch (error) {
+    console.error("Failed to load notifications:", error)
+  }
+}
+
+async function ensureOrganizationId() {
+  if (organizationId.value) return organizationId.value
+  const orgs = await organizationsApi.getMine()
+  const orgId = orgs?.[0]?.id ?? null
+  organizationId.value = orgId
+  return orgId
+}
+
+function mapNotification(type: number) {
+  switch (type) {
+    case 1:
+      return { icon: "mdi:send-outline", tone: "info" as const }
+    case 2:
+      return { icon: "mdi:check-circle-outline", tone: "success" as const }
+    case 3:
+      return { icon: "mdi:close-circle-outline", tone: "warning" as const }
+    case 4:
+      return { icon: "mdi:clock-outline", tone: "warning" as const }
+    default:
+      return { icon: "mdi:bell-outline", tone: "info" as const }
+  }
+}
+
+function formatRelativeTime(iso: string) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const diffMs = date.getTime() - Date.now()
+  const diffSec = Math.round(diffMs / 1000)
+  const abs = Math.abs(diffSec)
+  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" })
+
+  if (abs < 60) return rtf.format(diffSec, "second")
+  const diffMin = Math.round(diffSec / 60)
+  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, "minute")
+  const diffHour = Math.round(diffMin / 60)
+  if (Math.abs(diffHour) < 24) return rtf.format(diffHour, "hour")
+  const diffDay = Math.round(diffHour / 24)
+  if (Math.abs(diffDay) < 7) return rtf.format(diffDay, "day")
+  return date.toLocaleDateString()
 }
 </script>
 

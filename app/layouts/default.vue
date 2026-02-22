@@ -69,7 +69,12 @@ function collapseSidebar() {
 
 function onLogoClick() {
   if (isCollapsed.value) isCollapsed.value = false
-  else router.push('/dashboard')
+  else {
+    const hasDashboard = nav.value.some((group) =>
+        group.items.some((item) => item.to === '/dashboard')
+    )
+    router.push(hasDashboard ? '/dashboard' : '/timesheets')
+  }
 }
 
 function openMobileSidebar() {

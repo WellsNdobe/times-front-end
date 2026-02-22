@@ -170,6 +170,7 @@ async function onAddClient() {
     </section>
 </template>
 
+
 <style scoped>
 .clients {
     padding: var(--s-5);
