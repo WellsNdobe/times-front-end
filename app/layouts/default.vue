@@ -126,6 +126,7 @@ const pageTitle = computed(() => {
   grid-template-areas:
     "sidebar topbar"
     "sidebar main";
+  height: 100vh;
 }
 
 .shell.collapsed {
@@ -140,6 +141,8 @@ const pageTitle = computed(() => {
 .main {
   grid-area: main;
   padding: var(--s-5);
+  overflow: auto;
+  min-height: 0;
 }
 @media (max-width: 960px) {
   .shell {

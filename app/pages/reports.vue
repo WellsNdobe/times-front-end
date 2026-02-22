@@ -160,7 +160,7 @@ async function loadReports() {
         const [projectsResult, clientsResult, sheets] = await Promise.all([
             projectsApi.list(org.value.id),
             clientsApi.list(org.value.id),
-            timesheetsApi.listMine(org.value.id, {
+            timesheetsApi.listOrg(org.value.id, {
                 fromWeekStart: fromWeekStart.value,
                 toWeekStart: toWeekStart.value,
             }),
@@ -492,8 +492,7 @@ function exportDetailedRows() {
 
             <section class="card reports__note">
                 <p class="muted">
-                    Team-wide "individuals by project" reporting needs an org-level timesheet listing endpoint.
-                    Current report uses your existing "my timesheets" dataset.
+                    Team-wide reports are shown using org-level timesheets for the selected date range.
                 </p>
             </section>
         </template>
