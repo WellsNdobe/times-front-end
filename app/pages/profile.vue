@@ -34,6 +34,12 @@ const securityError = ref("")
 const passwordLoading = ref(false)
 const signOutAllLoading = ref(false)
 const showPasswordForm = ref(false)
+const openSections = ref({
+  defaults: true,
+  workflow: false,
+  security: false,
+  org: false,
+})
 
 const passwordForm = ref({
   currentPassword: "",
@@ -272,6 +278,17 @@ async function onSignOutAll() {
 async function onLogoutCurrent() {
   await logout()
 }
+
+function toggleSection(section: keyof typeof openSections.value) {
+  const isOpening = !openSections.value[section]
+  openSections.value.defaults = false
+  openSections.value.workflow = false
+  openSections.value.security = false
+  openSections.value.org = false
+  if (isOpening) {
+    openSections.value[section] = true
+  }
+}
 </script>
 
 <template>
@@ -319,10 +336,15 @@ async function onLogoutCurrent() {
             </div>
           </div>
         </article>
+      </section>
 
-        <details class="card profile__panel profile__collapse" open>
-          <summary class="profile__panel-title">Default settings</summary>
-          <div class="profile__panel-body">
+      <section class="profile__sections">
+        <article class="card profile__section">
+          <button type="button" class="profile__section-header" @click="toggleSection('defaults')">
+            <span>Default settings</span>
+            <span class="profile__chevron" :class="{ 'profile__chevron--open': openSections.defaults }" aria-hidden="true">▼</span>
+          </button>
+          <div v-if="openSections.defaults" class="profile__section-body">
             <label class="profile__field">
               <span class="profile__label">Default weekly hours target</span>
               <input v-model.number="personalPrefs.weeklyHoursTarget" type="number" min="1" max="168" />
@@ -362,11 +384,14 @@ async function onLogoutCurrent() {
               Save defaults
             </button>
           </div>
-        </details>
+        </article>
 
-        <details class="card profile__panel profile__collapse">
-          <summary class="profile__panel-title">Approvals and workflow</summary>
-          <div class="profile__panel-body">
+        <article class="card profile__section">
+          <button type="button" class="profile__section-header" @click="toggleSection('workflow')">
+            <span>Approvals and workflow</span>
+            <span class="profile__chevron" :class="{ 'profile__chevron--open': openSections.workflow }" aria-hidden="true">▼</span>
+          </button>
+          <div v-if="openSections.workflow" class="profile__section-body">
             <label class="profile__field">
               <span class="profile__label">Manager / approver</span>
               <select v-model="workflowPrefs.managerId">
@@ -405,11 +430,14 @@ async function onLogoutCurrent() {
               Save workflow
             </button>
           </div>
-        </details>
+        </article>
 
-        <details class="card profile__panel profile__collapse">
-          <summary class="profile__panel-title">Security</summary>
-          <div class="profile__panel-body">
+        <article class="card profile__section">
+          <button type="button" class="profile__section-header" @click="toggleSection('security')">
+            <span>Security</span>
+            <span class="profile__chevron" :class="{ 'profile__chevron--open': openSections.security }" aria-hidden="true">▼</span>
+          </button>
+          <div v-if="openSections.security" class="profile__section-body">
             <div class="profile__actions">
               <button type="button" class="btn btn-primary" @click="togglePasswordForm">
                 {{ showPasswordForm ? "Cancel password change" : "Change password" }}
@@ -454,11 +482,14 @@ async function onLogoutCurrent() {
             <p v-if="securityError" class="profile__error">{{ securityError }}</p>
             <p v-if="securityMessage" class="profile__hint">{{ securityMessage }}</p>
           </div>
-        </details>
+        </article>
 
-        <details v-if="isAdmin" class="card profile__panel profile__collapse">
-          <summary class="profile__panel-title">Organization preferences</summary>
-          <div class="profile__panel-body">
+        <article v-if="isAdmin" class="card profile__section">
+          <button type="button" class="profile__section-header" @click="toggleSection('org')">
+            <span>Organization preferences</span>
+            <span class="profile__chevron" :class="{ 'profile__chevron--open': openSections.org }" aria-hidden="true">▼</span>
+          </button>
+          <div v-if="openSections.org" class="profile__section-body">
             <div class="profile__kv">
               <span>Organization</span>
               <strong>{{ orgName }}</strong>
@@ -483,7 +514,7 @@ async function onLogoutCurrent() {
             </button>
             <p class="profile__hint">Admin-only settings. Stored locally until backend support is added.</p>
           </div>
-        </details>
+        </article>
       </section>
 
       <p v-if="saveMessage" class="profile__saved">{{ saveMessage }}</p>
@@ -517,6 +548,11 @@ async function onLogoutCurrent() {
 .profile__grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--s-3);
+}
+
+.profile__sections {
+  display: grid;
   gap: var(--s-3);
 }
 
@@ -566,42 +602,41 @@ async function onLogoutCurrent() {
   font-weight: 700;
 }
 
-.profile__panel {
-  grid-column: span 4;
-  padding: var(--s-4);
-  display: grid;
-  gap: var(--s-3);
-}
-
-.profile__panel-title {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.profile__collapse {
+.profile__section {
   padding: 0;
 }
 
-.profile__collapse .profile__panel-title {
-  list-style: none;
+.profile__section-header {
+  width: 100%;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   padding: var(--s-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 1rem;
   font-weight: 700;
-  border-bottom: 1px solid transparent;
+  color: var(--text-1);
+  border-bottom: 1px solid var(--border);
 }
 
-.profile__collapse[open] .profile__panel-title {
-  border-bottom-color: var(--border);
-}
-
-.profile__collapse .profile__panel-title::-webkit-details-marker {
-  display: none;
-}
-
-.profile__panel-body {
+.profile__section-body {
   padding: var(--s-4);
   display: grid;
   gap: var(--s-3);
+}
+
+.profile__chevron {
+  color: var(--text-2);
+  opacity: 0.95;
+  font-size: 12px;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.profile__chevron--open {
+  transform: rotate(180deg);
 }
 
 .profile__field {
@@ -655,18 +690,11 @@ async function onLogoutCurrent() {
 }
 
 @media (max-width: 1100px) {
-  .profile__panel {
-    grid-column: span 6;
-  }
 }
 
 @media (max-width: 900px) {
   .profile__summary-row {
     grid-template-columns: 1fr;
-  }
-
-  .profile__panel {
-    grid-column: span 12;
   }
 }
 </style>
