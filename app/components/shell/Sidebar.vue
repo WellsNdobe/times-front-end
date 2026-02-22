@@ -16,10 +16,9 @@
           :data-tooltip="collapsed ? 'Open sidebar' : null"
       >
         <span class="logo-mark" aria-hidden="true">
-          <Icon name="mdi:clock-outline" size="18" />
+          <img class="logo-image" :class="{ 'logo-image--expanded': !collapsed }" :src="logoSrc" alt="" />
         </span>
         <span v-if="!collapsed" class="logo-text">
-          <Icon name="mdi:timer-sand-complete" size="20" aria-hidden="true" />
           <span class="sr-only">Times</span>
         </span>
       </button>
@@ -118,6 +117,7 @@ const emit = defineEmits<{
 }>()
 
 const { logout } = useAuth()
+const logoSrc = 'https://favicon.im/cueconsulting.co.za?larger=true'
 
 function onLogoClick() {
   emit('logo-click')
@@ -176,6 +176,16 @@ async function onLogoutClick() {
 }
 .logo-mark :deep(svg) {
   color: inherit;
+}
+.logo-image {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  display: block;
+}
+.logo-image--expanded {
+  width: 26px;
+  height: 26px;
 }
 
 .logo-text {
