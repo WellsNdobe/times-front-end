@@ -39,6 +39,16 @@ export type ListTimesheetsParams = {
 }
 
 export const timesheetsApi = {
+    /** GET api/v1/organizations/{organizationId}/timesheets */
+    listOrg(organizationId: string, params?: ListTimesheetsParams) {
+        const search = new URLSearchParams()
+        if (params?.fromWeekStart) search.set("fromWeekStart", params.fromWeekStart)
+        if (params?.toWeekStart) search.set("toWeekStart", params.toWeekStart)
+        const query = search.toString()
+        const url = `/v1/organizations/${organizationId}/timesheets${query ? `?${query}` : ""}`
+        return apiClient<Timesheet[]>(url, { method: "GET" })
+    },
+
     /** GET api/v1/organizations/{organizationId}/timesheets/mine */
     listMine(organizationId: string, params?: ListTimesheetsParams) {
         const search = new URLSearchParams()

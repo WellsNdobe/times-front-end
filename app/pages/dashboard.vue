@@ -16,8 +16,8 @@ const org = ref<Organization | null>(null)
 const members = ref<OrganizationMember[]>([])
 const projects = ref<Project[]>([])
 const clients = ref<Client[]>([])
-const timesheet = ref<Timesheet | null>(null)
-const entries = ref<TimesheetEntry[]>([])
+const orgTimesheets = ref<Timesheet[]>([])
+const orgEntries = ref<TimesheetEntry[]>([])
 const pendingApprovalCount = ref(0)
 
 const loading = ref(true)
@@ -46,36 +46,64 @@ const isManagerOrAdmin = computed(() => {
     return role === 0 || role === 1
 })
 
-const timesheetStatusLabel = computed(() => {
-    const status = timesheet.value?.status
-    if (status === 1) return "Submitted"
-    if (status === 2) return "Approved"
-    if (status === 3) return "Rejected"
-    return "Draft"
+const statusSummary = computed(() => {
+    let submitted = 0
+    let approved = 0
+    let rejected = 0
+    let draft = 0
+    for (const ts of orgTimesheets.value) {
+        if (ts.status === 1) submitted++
+        else if (ts.status === 2) approved++
+        else if (ts.status === 3) rejected++
+        else draft++
+    }
+    return {
+        total: orgTimesheets.value.length,
+        submitted,
+        approved,
+        rejected,
+        draft,
+    }
+})
+const statusSummaryLabel = computed(() => {
+    if (!statusSummary.value.total) return "No data"
+    const submittedOrApproved = statusSummary.value.submitted + statusSummary.value.approved
+    return `${submittedOrApproved}/${statusSummary.value.total}`
+})
+const statusSummaryMeta = computed(() => {
+    if (!statusSummary.value.total) return "No timesheets for this week."
+    return `${statusSummary.value.approved} approved • ${statusSummary.value.draft} draft • ${statusSummary.value.rejected} rejected`
+})
+const statusSummaryPill = computed(() => {
+    if (!statusSummary.value.total) return "No data"
+    if (statusSummary.value.submitted === statusSummary.value.total) return "On track"
+    if (statusSummary.value.rejected > 0) return "Needs attention"
+    return "In progress"
 })
 const statusToneClass = computed(() => {
-    const status = timesheet.value?.status
-    if (status === 2) return "kpi__pill--success"
-    if (status === 1) return "kpi__pill--info"
-    if (status === 3) return "kpi__pill--warning"
-    return "kpi__pill--neutral"
+    if (!statusSummary.value.total) return "kpi__pill--neutral"
+    if (statusSummary.value.submitted === statusSummary.value.total) return "kpi__pill--success"
+    if (statusSummary.value.rejected > 0) return "kpi__pill--warning"
+    return "kpi__pill--info"
 })
 
 const weekMinutes = computed(() =>
-    entries.value.reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
+    orgEntries.value.reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
 )
 const weekHours = computed(() => (weekMinutes.value / 60).toFixed(1))
-const weekTargetHours = 40
+const weekTargetHours = computed(() => teamSize.value * 40)
 const weekProgressPercent = computed(() =>
-    Math.min(100, Math.round((Number(weekHours.value) / weekTargetHours) * 100))
+    weekTargetHours.value > 0
+        ? Math.min(100, Math.round((Number(weekHours.value) / weekTargetHours.value) * 100))
+        : 0
 )
 const todayMinutes = computed(() =>
-    entries.value
+    orgEntries.value
         .filter((entry) => entry.workDate === today)
         .reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
 )
 const todayEntriesCount = computed(
-    () => entries.value.filter((entry) => entry.workDate === today).length
+    () => orgEntries.value.filter((entry) => entry.workDate === today).length
 )
 const activeProjectsCount = computed(
     () => projects.value.filter((project) => project.isActive !== false).length
@@ -100,7 +128,7 @@ const hoursByProject = computed(() => {
     const visibleProjectIds = new Set(visibleProjects.map((project) => project.id))
 
     const totals = new Map<string, number>()
-    for (const entry of entries.value) {
+    for (const entry of orgEntries.value) {
         if (!visibleProjectIds.has(entry.projectId)) continue
         totals.set(entry.projectId, (totals.get(entry.projectId) ?? 0) + (entry.durationMinutes ?? 0))
     }
@@ -122,7 +150,7 @@ const hoursByClient = computed(() => {
         projectClientMap.set(project.id, project.clientId ?? "unassigned")
     }
     const totals = new Map<string, number>()
-    for (const entry of entries.value) {
+    for (const entry of orgEntries.value) {
         const clientId = projectClientMap.get(entry.projectId) ?? "unassigned"
         totals.set(clientId, (totals.get(clientId) ?? 0) + (entry.durationMinutes ?? 0))
     }
@@ -145,7 +173,7 @@ const weekTrend = computed(() => {
     const start = new Date(weekStartDate.value)
     const days: Array<{ date: string; label: string; totalMinutes: number; height: number }> = []
     const totalsByDate = new Map<string, number>()
-    for (const entry of entries.value) {
+    for (const entry of orgEntries.value) {
         totalsByDate.set(entry.workDate, (totalsByDate.get(entry.workDate) ?? 0) + (entry.durationMinutes ?? 0))
     }
     for (let i = 0; i < 7; i++) {
@@ -186,11 +214,11 @@ async function loadDashboard() {
         if (!firstOrg) return
         org.value = firstOrg
 
-        const [membersResult, projectsResult, clientsResult, mineResult] = await Promise.all([
+        const [membersResult, projectsResult, clientsResult, orgTimesheetsResult] = await Promise.all([
             organizationsApi.getMembers(org.value.id),
             projectsApi.list(org.value.id),
             clientsApi.list(org.value.id),
-            timesheetsApi.listMine(org.value.id, {
+            timesheetsApi.listOrg(org.value.id, {
                 fromWeekStart: weekStartDate.value,
                 toWeekStart: weekStartDate.value,
             }),
@@ -200,10 +228,15 @@ async function loadDashboard() {
         projects.value = projectsResult
         clients.value = clientsResult
 
-        const thisWeek = mineResult[0] ?? null
-        timesheet.value = thisWeek
-        entries.value =
-            thisWeek?.id ? await timesheetEntriesApi.list(org.value.id, thisWeek.id) : []
+        orgTimesheets.value = orgTimesheetsResult
+        if (orgTimesheets.value.length) {
+            const entriesByTimesheet = await Promise.all(
+                orgTimesheets.value.map((ts) => timesheetEntriesApi.list(org.value!.id, ts.id))
+            )
+            orgEntries.value = entriesByTimesheet.flat()
+        } else {
+            orgEntries.value = []
+        }
 
         if (myMember.value && (myMember.value.role === 0 || myMember.value.role === 1)) {
             const pending = await timesheetsApi.listPendingApproval(org.value.id)
@@ -317,9 +350,10 @@ function toggleClientFilter(clientId: string) {
                 </article>
 
                 <article class="card kpi">
-                    <p class="kpi__label">Timesheet Status</p>
-                    <p class="kpi__value">{{ timesheetStatusLabel }}</p>
-                    <span class="kpi__pill" :class="statusToneClass">{{ timesheetStatusLabel }}</span>
+                    <p class="kpi__label">Timesheets Submitted</p>
+                    <p class="kpi__value">{{ statusSummaryLabel }}</p>
+                    <p class="kpi__meta">{{ statusSummaryMeta }}</p>
+                    <span class="kpi__pill" :class="statusToneClass">{{ statusSummaryPill }}</span>
                 </article>
 
                 <article class="card kpi">
