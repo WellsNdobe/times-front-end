@@ -41,6 +41,16 @@ const myMember = computed(() => {
     if (!user.value?.userId) return null
     return members.value.find((member) => member.userId === user.value?.userId) ?? null
 })
+const userDisplayName = computed(() => {
+    const fullName = [myMember.value?.firstName, myMember.value?.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim()
+    if (fullName) return fullName
+    const email = user.value?.email ?? ""
+    if (email.includes("@")) return email.split("@")[0]
+    return "there"
+})
 const isManagerOrAdmin = computed(() => {
     const role = myMember.value?.role
     return role === 0 || role === 1
@@ -299,7 +309,7 @@ function toggleClientFilter(clientId: string) {
         <header class="dash-hero card">
             <div class="dash-hero__left">
                 <p class="dash-hero__eyebrow">Workload pulse</p>
-                <h1 class="dash-hero__title">Dashboard</h1>
+                <h1 class="dash-hero__title">Welcome back, {{ userDisplayName }}</h1>
                 <p class="dash-hero__subtitle">{{ org?.name }} | {{ weekLabel }}</p>
                 <div class="dash-hero__week-controls">
                     <button type="button" class="btn btn-secondary btn-sm" @click="shiftWeek(-1)">
