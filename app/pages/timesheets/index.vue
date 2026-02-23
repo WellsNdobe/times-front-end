@@ -34,6 +34,18 @@ const weekLabel = computed(() => `Week of ${weekStartDate.value}`)
 const isCurrentWeek = computed(
     () => weekStartDate.value === formatDateForInput(getWeekStart(new Date()))
 )
+const isFutureWeek = computed(() => {
+    const selectedStart = new Date(weekStartDate.value)
+    const currentWeekStart = getWeekStart(new Date())
+    return selectedStart.getTime() > currentWeekStart.getTime()
+})
+const canGoNextWeek = computed(() => {
+    const selectedStart = new Date(weekStartDate.value)
+    const currentWeekStart = getWeekStart(new Date())
+    const limit = new Date(currentWeekStart)
+    limit.setDate(limit.getDate() + 7)
+    return selectedStart.getTime() < limit.getTime()
+})
 const timesheetStatusLabel = computed(() => {
     if (!timesheet.value?.id) return "Not created"
     const status = timesheet.value?.status
@@ -63,6 +75,7 @@ const isEditable = computed(() => {
 const canSubmit = computed(() => {
     if (!timesheet.value?.id) return false
     if (!isEditable.value) return false
+    if (isFutureWeek.value) return false
     return entries.value.length > 0
 })
 
@@ -116,6 +129,7 @@ async function loadSelectedWeek() {
 
 function moveWeek(offset: number) {
     const current = new Date(weekStartDate.value)
+    if (offset > 0 && !canGoNextWeek.value) return
     current.setDate(current.getDate() + offset * 7)
     weekStartDate.value = formatDateForInput(getWeekStart(current))
     loadSelectedWeek()
@@ -129,6 +143,7 @@ function goToCurrentWeek() {
 
 async function createTimesheetForSelectedWeek() {
     if (!org.value?.id || timesheet.value?.id) return
+    if (isFutureWeek.value) return
     creatingTimesheet.value = true
     error.value = null
     try {
@@ -296,7 +311,7 @@ async function submitTimesheet() {
                     >
                         This week
                     </button>
-                    <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(1)">
+                    <button type="button" class="btn btn-secondary btn-sm" :disabled="!canGoNextWeek" @click="moveWeek(1)">
                         Next
                     </button>
                 </div>
@@ -339,7 +354,7 @@ async function submitTimesheet() {
                 <button
                     type="button"
                     class="btn btn-primary"
-                    :disabled="creatingTimesheet || loading"
+                    :disabled="creatingTimesheet || loading || isFutureWeek"
                     @click="createTimesheetForSelectedWeek"
                 >
                     {{ creatingTimesheet ? "Creating..." : "Create timesheet" }}
