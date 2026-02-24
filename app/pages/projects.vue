@@ -2,19 +2,24 @@
 definePageMeta({ middleware: ["auth", "require-organization"] })
 
 import { ref, computed, onMounted } from "vue"
-import { organizationsApi, type Organization } from "~/api/organizationsApi"
+import { useAuth } from "~/composables/useAuth"
+import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
 import { clientsApi, type Client } from "~/api/clientsApi"
 import {
     projectsApi,
     type Project,
     type CreateProjectRequest,
     type UpdateProjectRequest,
+    type ProjectAssignment,
 } from "~/api/projectsApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
+
+const { user } = useAuth()
 
 const org = ref<Organization | null>(null)
 const clients = ref<Client[]>([])
 const projects = ref<Project[]>([])
+const members = ref<OrganizationMember[]>([])
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 
@@ -36,6 +41,23 @@ const updateError = ref<UiError | null>(null)
 
 const organizationId = computed(() => org.value?.id ?? "")
 
+const memberMap = computed(() => {
+    const map = new Map<string, OrganizationMember>()
+    for (const m of members.value) map.set(m.userId, m)
+    return map
+})
+
+const myMember = computed(() => {
+    const userId = user.value?.userId
+    if (!userId) return null
+    return members.value.find((m) => m.userId === userId) ?? null
+})
+
+const isManagerOrAdmin = computed(() => {
+    const role = myMember.value?.role
+    return role === 0 || role === 1
+})
+
 const listParams = computed(() => {
     if (filterActive.value === "all") return undefined
     return { isActive: filterActive.value }
@@ -54,12 +76,14 @@ async function loadProjects() {
         if (!firstOrg) return
         org.value = firstOrg
         if (org.value?.id) {
-            const [projectsResult, clientsResult] = await Promise.all([
+            const [projectsResult, clientsResult, membersResult] = await Promise.all([
                 projectsApi.list(org.value.id, listParams.value),
                 clientsApi.list(org.value.id),
+                organizationsApi.getMembers(org.value.id),
             ])
             projects.value = projectsResult
             clients.value = clientsResult
+            members.value = membersResult
         }
     } catch (e) {
         console.error("Load projects error:", e)
@@ -73,6 +97,7 @@ onMounted(() => loadProjects())
 
 async function onFilterChange() {
     if (!organizationId.value) return
+    openAssignmentsProjectId.value = null
     loading.value = true
     error.value = null
     try {
@@ -146,6 +171,95 @@ function clientName(project: Project) {
     if (!project.clientId) return "Unassigned"
     const client = clients.value.find((c) => c.id === project.clientId)
     return client?.name ?? "Unassigned"
+}
+
+const openAssignmentsProjectId = ref<string | null>(null)
+const assignments = ref<ProjectAssignment[]>([])
+const assignmentsLoading = ref(false)
+const assignmentsError = ref<UiError | null>(null)
+
+const assignUserId = ref("")
+const assignLoading = ref(false)
+const assignError = ref<UiError | null>(null)
+const unassignLoadingUserId = ref<string | null>(null)
+
+function memberDisplayNameByUserId(userId?: string) {
+    if (!userId) return "Unknown member"
+    const member = memberMap.value.get(userId)
+    if (!member) return userId
+    const name = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
+    return name || member.userId
+}
+
+const assignedUserIds = computed(() => new Set(assignments.value.map((a) => a.userId)))
+const assignCandidates = computed(() =>
+    members.value
+        .filter((m) => m.isActive)
+        .filter((m) => !assignedUserIds.value.has(m.userId))
+        .sort((a, b) =>
+            memberDisplayNameByUserId(a.userId).localeCompare(memberDisplayNameByUserId(b.userId))
+        )
+)
+
+async function loadAssignments(projectId: string) {
+    if (!organizationId.value) return
+    assignmentsLoading.value = true
+    assignmentsError.value = null
+    try {
+        assignments.value = await projectsApi.getAssignments(organizationId.value, projectId)
+    } catch (e) {
+        console.error("Load assignments error:", e)
+        assignmentsError.value = toUiError(e)
+    } finally {
+        assignmentsLoading.value = false
+    }
+}
+
+async function toggleAssignments(projectId: string) {
+    assignError.value = null
+    assignmentsError.value = null
+    if (openAssignmentsProjectId.value === projectId) {
+        openAssignmentsProjectId.value = null
+        return
+    }
+    openAssignmentsProjectId.value = projectId
+    assignUserId.value = ""
+    await loadAssignments(projectId)
+}
+
+async function onAssignUser() {
+    if (!organizationId.value || !openAssignmentsProjectId.value) return
+    assignError.value = null
+    const userId = assignUserId.value?.trim()
+    if (!userId) {
+        assignError.value = { title: "User required", message: "Select a team member to assign." }
+        return
+    }
+    assignLoading.value = true
+    try {
+        await projectsApi.assignUser(organizationId.value, openAssignmentsProjectId.value, { userId })
+        assignUserId.value = ""
+        await loadAssignments(openAssignmentsProjectId.value)
+    } catch (e) {
+        console.error("Assign user error:", e)
+        assignError.value = toUiError(e)
+    } finally {
+        assignLoading.value = false
+    }
+}
+
+async function onUnassignUser(userId: string) {
+    if (!organizationId.value || !openAssignmentsProjectId.value) return
+    unassignLoadingUserId.value = userId
+    try {
+        await projectsApi.unassignUser(organizationId.value, openAssignmentsProjectId.value, userId)
+        assignments.value = assignments.value.filter((a) => a.userId !== userId)
+    } catch (e) {
+        console.error("Unassign user error:", e)
+        assignmentsError.value = toUiError(e)
+    } finally {
+        unassignLoadingUserId.value = null
+    }
 }
 </script>
 
@@ -235,7 +349,8 @@ function clientName(project: Project) {
                         </tr>
                     </thead>
                     <tbody>
-                        <tr v-for="project in projects" :key="project.id">
+                        <template v-for="project in projects" :key="project.id">
+                            <tr>
                             <td>
                                 <template v-if="editingProjectId === project.id">
                                     <input
@@ -296,17 +411,99 @@ function clientName(project: Project) {
                                 </span>
                             </td>
                             <td class="projects-table__actions">
-                                <button
-                                    v-if="editingProjectId !== project.id"
-                                    type="button"
-                                    class="btn btn-secondary btn-sm"
-                                    aria-label="Edit project"
-                                    @click="startEdit(project)"
-                                >
-                                    Edit
-                                </button>
+                                <div class="row-actions">
+                                    <button
+                                        type="button"
+                                        class="btn btn-secondary btn-sm"
+                                        :aria-expanded="openAssignmentsProjectId === project.id"
+                                        @click="toggleAssignments(project.id)"
+                                    >
+                                        {{ openAssignmentsProjectId === project.id ? "Hide team" : "Team" }}
+                                    </button>
+                                    <button
+                                        v-if="editingProjectId !== project.id"
+                                        type="button"
+                                        class="btn btn-secondary btn-sm"
+                                        aria-label="Edit project"
+                                        @click="startEdit(project)"
+                                    >
+                                        Edit
+                                    </button>
+                                </div>
                             </td>
                         </tr>
+                            <tr v-if="openAssignmentsProjectId === project.id" class="projects-table__expanded">
+                                <td :colspan="4">
+                                    <div class="assignments">
+                                        <div class="assignments__head">
+                                            <strong>Assigned team members</strong>
+                                            <button
+                                                type="button"
+                                                class="btn btn-secondary btn-sm"
+                                                :disabled="assignmentsLoading"
+                                                @click="loadAssignments(project.id)"
+                                            >
+                                                Refresh
+                                            </button>
+                                        </div>
+
+                                        <div v-if="assignmentsError" class="alert alert--inline" role="alert">
+                                            {{ assignmentsError.message }}
+                                        </div>
+
+                                        <p v-else-if="assignmentsLoading" class="muted">Loading assignments...</p>
+
+                                        <ul v-else-if="assignments.length" class="assignments__list">
+                                            <li v-for="a in assignments" :key="a.id" class="assignments__item">
+                                                <div class="assignments__who">
+                                                    <span class="assignments__name">{{ memberDisplayNameByUserId(a.userId) }}</span>
+                                                    <span class="assignments__meta">{{ a.userId }}</span>
+                                                </div>
+                                                <button
+                                                    v-if="isManagerOrAdmin"
+                                                    type="button"
+                                                    class="btn btn-secondary btn-sm"
+                                                    :disabled="unassignLoadingUserId === a.userId"
+                                                    @click="onUnassignUser(a.userId)"
+                                                >
+                                                    {{ unassignLoadingUserId === a.userId ? "Removing..." : "Remove" }}
+                                                </button>
+                                            </li>
+                                        </ul>
+
+                                        <p v-else class="muted">No team members assigned yet.</p>
+
+                                        <div v-if="isManagerOrAdmin" class="assignments__add">
+                                            <label class="form-field">
+                                                <span class="form-field__label">Assign a member</span>
+                                                <select
+                                                    v-model="assignUserId"
+                                                    :disabled="assignLoading || !assignCandidates.length"
+                                                >
+                                                    <option value="">Select a member...</option>
+                                                    <option v-for="m in assignCandidates" :key="m.userId" :value="m.userId">
+                                                        {{ memberDisplayNameByUserId(m.userId) }}
+                                                    </option>
+                                                </select>
+                                            </label>
+                                            <button
+                                                type="button"
+                                                class="btn btn-primary btn-sm"
+                                                :disabled="assignLoading || !assignCandidates.length"
+                                                @click="onAssignUser"
+                                            >
+                                                {{ assignLoading ? "Assigning..." : "Assign" }}
+                                            </button>
+                                            <div v-if="assignError" class="alert alert--inline" role="alert">
+                                                {{ assignError.message }}
+                                            </div>
+                                        </div>
+
+                                        <p v-else class="muted">Only managers/admins can change assignments.</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
                     </tbody>
                 </table>
                 <p v-else class="muted">No projects yet. Create one above.</p>
@@ -427,7 +624,7 @@ function clientName(project: Project) {
 }
 
 .projects-table__actions {
-    width: 120px;
+    width: 170px;
 }
 
 .project-name {
@@ -456,6 +653,12 @@ function clientName(project: Project) {
     font-size: 0.875rem;
 }
 
+.row-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+}
+
 .status-badge {
     display: inline-block;
     padding: 4px 10px;
@@ -478,6 +681,66 @@ function clientName(project: Project) {
     margin-top: var(--s-2);
     padding: var(--s-2);
     font-size: 0.875rem;
+}
+
+.projects-table__expanded td {
+    background: var(--surface-2);
+}
+
+.assignments {
+    display: grid;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    border-radius: var(--r-md);
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.assignments__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s-3);
+}
+
+.assignments__list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: var(--s-2);
+}
+
+.assignments__item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+}
+
+.assignments__who {
+    display: grid;
+    gap: 2px;
+}
+
+.assignments__name {
+    font-weight: 600;
+}
+
+.assignments__meta {
+    color: var(--text-3);
+    font-size: 0.75rem;
+}
+
+.assignments__add {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-3);
+    align-items: flex-end;
 }
 
 .muted {

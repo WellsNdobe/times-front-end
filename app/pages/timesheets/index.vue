@@ -29,11 +29,16 @@ const error = ref<UiError | null>(null)
 const submitting = ref(false)
 const creatingTimesheet = ref(false)
 
-const weekStartDate = ref(formatDateForInput(getWeekStart(new Date())))
-const weekLabel = computed(() => `Week of ${weekStartDate.value}`)
-const isCurrentWeek = computed(
-    () => weekStartDate.value === formatDateForInput(getWeekStart(new Date()))
+const currentWeekStart = computed(() => formatDateForInput(getWeekStart(new Date())))
+const maxWeekStartDate = computed(() =>
+    formatDateForInput(addDays(getWeekStart(new Date()), 7))
 )
+
+const weekStartDate = ref(currentWeekStart.value)
+const weekLabel = computed(() => `Week of ${weekStartDate.value}`)
+const isCurrentWeek = computed(() => weekStartDate.value === currentWeekStart.value)
+const isFutureWeek = computed(() => weekStartDate.value > currentWeekStart.value)
+const isAtMaxWeek = computed(() => weekStartDate.value >= maxWeekStartDate.value)
 const timesheetStatusLabel = computed(() => {
     if (!timesheet.value?.id) return "Not created"
     const status = timesheet.value?.status
@@ -63,6 +68,7 @@ const isEditable = computed(() => {
 const canSubmit = computed(() => {
     if (!timesheet.value?.id) return false
     if (!isEditable.value) return false
+    if (isFutureWeek.value) return false
     return entries.value.length > 0
 })
 
@@ -117,7 +123,12 @@ async function loadSelectedWeek() {
 function moveWeek(offset: number) {
     const current = new Date(weekStartDate.value)
     current.setDate(current.getDate() + offset * 7)
-    weekStartDate.value = formatDateForInput(getWeekStart(current))
+    const nextWeekStart = formatDateForInput(getWeekStart(current))
+    const clampedWeekStart =
+        offset > 0 && nextWeekStart > maxWeekStartDate.value ? maxWeekStartDate.value : nextWeekStart
+
+    if (clampedWeekStart === weekStartDate.value) return
+    weekStartDate.value = clampedWeekStart
     loadSelectedWeek()
 }
 
@@ -250,6 +261,12 @@ function getWeekStart(date: Date) {
     return start
 }
 
+function addDays(date: Date, days: number) {
+    const copy = new Date(date)
+    copy.setDate(copy.getDate() + days)
+    return copy
+}
+
 function formatDateForInput(date: Date) {
     const year = date.getFullYear()
     const month = String(date.getMonth() + 1).padStart(2, "0")
@@ -296,7 +313,12 @@ async function submitTimesheet() {
                     >
                         This week
                     </button>
-                    <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(1)">
+                    <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        :disabled="isAtMaxWeek"
+                        @click="moveWeek(1)"
+                    >
                         Next
                     </button>
                 </div>
@@ -326,6 +348,11 @@ async function submitTimesheet() {
                     type="button"
                     class="btn btn-secondary"
                     :disabled="loading || submitting || !canSubmit"
+                    :title="
+                        isFutureWeek
+                            ? 'You can plan ahead, but submission is only enabled when the week begins.'
+                            : undefined
+                    "
                     @click="submitTimesheet"
                 >
                     {{ submitButtonLabel }}
