@@ -2,7 +2,7 @@
 definePageMeta({ middleware: ["auth", "require-organization"] })
 
 import { computed, onMounted, ref } from "vue"
-import { organizationsApi, type Organization } from "~/api/organizationsApi"
+import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { clientsApi, type Client } from "~/api/clientsApi"
 import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
@@ -15,6 +15,7 @@ type ReportRow = TimesheetEntry & {
 }
 
 const org = ref<Organization | null>(null)
+const members = ref<OrganizationMember[]>([])
 const projects = ref<Project[]>([])
 const clients = ref<Client[]>([])
 const timesheets = ref<Timesheet[]>([])
@@ -38,6 +39,22 @@ const projectById = computed(() => {
 const clientById = computed(() => {
     const map = new Map<string, Client>()
     for (const client of clients.value) map.set(client.id, client)
+    return map
+})
+const memberNameByUserId = computed(() => {
+    const map = new Map<string, string>()
+    for (const member of members.value) {
+        const fullName = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
+        map.set(member.userId, fullName || member.userId)
+    }
+    return map
+})
+const timesheetUserIdById = computed(() => {
+    const map = new Map<string, string>()
+    for (const sheet of timesheets.value) {
+        if (!sheet.id || !sheet.userId) continue
+        map.set(sheet.id, sheet.userId)
+    }
     return map
 })
 
@@ -126,6 +143,27 @@ const hoursByClient = computed(() => {
         .sort((a, b) => b.minutes - a.minutes)
 })
 
+const hoursByEmployee = computed(() => {
+    const totals = new Map<string, number>()
+    for (const row of filteredRows.value) {
+        const timesheetId = row.timesheetId ?? ""
+        const userId = timesheetUserIdById.value.get(timesheetId) ?? "unknown"
+        totals.set(userId, (totals.get(userId) ?? 0) + (row.durationMinutes ?? 0))
+    }
+    const max = Math.max(...totals.values(), 0)
+    return [...totals.entries()]
+        .map(([userId, minutes]) => ({
+            userId,
+            label:
+                userId === "unknown"
+                    ? "Unknown employee"
+                    : memberNameByUserId.value.get(userId) ?? "Unknown employee",
+            minutes,
+            percent: max ? Math.round((minutes / max) * 100) : 0,
+        }))
+        .sort((a, b) => b.minutes - a.minutes)
+})
+
 const weeklyTrend = computed(() => {
     const totals = new Map<string, number>()
     for (const row of filteredRows.value) {
@@ -157,7 +195,8 @@ async function loadReports() {
         if (!firstOrg) return
         org.value = firstOrg
 
-        const [projectsResult, clientsResult, sheets] = await Promise.all([
+        const [membersResult, projectsResult, clientsResult, sheets] = await Promise.all([
+            organizationsApi.getMembers(org.value.id),
             projectsApi.list(org.value.id),
             clientsApi.list(org.value.id),
             timesheetsApi.listOrg(org.value.id, {
@@ -165,6 +204,7 @@ async function loadReports() {
                 toWeekStart: toWeekStart.value,
             }),
         ])
+        members.value = membersResult
         projects.value = projectsResult
         clients.value = clientsResult
         timesheets.value = sheets
@@ -431,6 +471,27 @@ function exportDetailedRows() {
 
                 <article class="card panel">
                     <header class="panel__head">
+                        <h2>Hours by employee</h2>
+                    </header>
+                    <ul v-if="hoursByEmployee.length" class="list">
+                        <li v-for="item in hoursByEmployee" :key="item.userId" class="list__item">
+                            <div class="list__row">
+                                <span>{{ item.label }}</span>
+                                <strong>{{ formatMinutes(item.minutes) }}</strong>
+                            </div>
+                            <div class="list__track">
+                                <div
+                                    class="list__fill list__fill--employee"
+                                    :style="{ width: `${item.percent}%` }"
+                                ></div>
+                            </div>
+                        </li>
+                    </ul>
+                    <p v-else class="muted">No employee activity found.</p>
+                </article>
+
+                <article class="card panel">
+                    <header class="panel__head">
                         <h2>Hours by client</h2>
                     </header>
                     <ul v-if="hoursByClient.length" class="list">
@@ -598,8 +659,9 @@ function exportDetailedRows() {
 }
 
 .reports__grid > .panel:nth-child(2),
-.reports__grid > .panel:nth-child(3) {
-    grid-column: span 3;
+.reports__grid > .panel:nth-child(3),
+.reports__grid > .panel:nth-child(4) {
+    grid-column: span 6;
 }
 
 .panel__head h2 {
@@ -683,6 +745,10 @@ function exportDetailedRows() {
     background: var(--accent);
 }
 
+.list__fill--employee {
+    background: var(--success, #22c55e);
+}
+
 .reports__status {
     padding: var(--s-4);
 }
@@ -729,7 +795,8 @@ function exportDetailedRows() {
     .kpi,
     .reports__grid > .panel:nth-child(1),
     .reports__grid > .panel:nth-child(2),
-    .reports__grid > .panel:nth-child(3) {
+    .reports__grid > .panel:nth-child(3),
+    .reports__grid > .panel:nth-child(4) {
         grid-column: span 12;
     }
 }
