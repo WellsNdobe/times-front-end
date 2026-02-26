@@ -11,6 +11,7 @@ export type RegisterRequest = {
     password: string
     firstName: string
     lastName: string
+    organizationName: string
 }
 
 export type AuthResponse = {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ middleware: ["auth", "require-organization"] })
+definePageMeta({ middleware: ["auth"] })
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRoute } from "vue-router"

@@ -2,8 +2,8 @@
 definePageMeta({ layout: "auth", middleware: "guest" })
 
 import { computed, ref } from "vue"
-import { authApi } from "~/api/authApi"
-import { organizationsApi } from "~/api/organizationsApi"
+
+const { register } = useAuth()
 
 const firstName = ref("")
 const lastName = ref("")
@@ -13,8 +13,7 @@ const confirm = ref("")
 const organizationName = ref("")
 
 const step = ref<1 | 2>(1)
-const accountLoading = ref(false)
-const organizationLoading = ref(false)
+const registerLoading = ref(false)
 const error = ref<string | null>(null)
 
 const accountReady = computed(
@@ -34,40 +33,24 @@ async function onCreateAccount() {
     return
   }
 
-  accountLoading.value = true
-  try {
-    const res = await authApi.register({
-      firstName: firstName.value,
-      lastName: lastName.value,
-      email: email.value,
-      password: password.value,
-    })
-
-    if (!res.token) {
-      error.value = "Account was created, but auto sign-in is not available right now. Please sign in to continue."
-      return
-    }
-
-    const token = useCookie<string | null>("auth_token", { sameSite: "lax" })
-    token.value = res.token
-    step.value = 2
-  } catch (e: any) {
-    error.value = e?.data || e?.data?.message || e?.message || "Unable to create account."
-  } finally {
-    accountLoading.value = false
-  }
+  step.value = 2
 }
 
-async function onCreateOrganization() {
+async function onCompleteRegistration() {
   error.value = null
-  organizationLoading.value = true
+  registerLoading.value = true
   try {
-    await organizationsApi.create({ name: organizationName.value.trim() })
-    await navigateTo("/dashboard")
+    await register(
+      email.value,
+      password.value,
+      firstName.value,
+      lastName.value,
+      organizationName.value.trim()
+    )
   } catch (e: any) {
-    error.value = e?.data || e?.data?.message || e?.message || "Unable to create organization."
+    error.value = e?.data || e?.data?.message || e?.message || "Unable to complete registration."
   } finally {
-    organizationLoading.value = false
+    registerLoading.value = false
   }
 }
 </script>
@@ -79,16 +62,16 @@ async function onCreateOrganization() {
         Automate your <span>Timesheets</span>
       </h1>
       <p class="quote">
-        "Ease of use and simplicity finally got our time tracking in order. We can now see if we are on time and on budget at any moment."
+        "Times has made our weekly submissions painless. Our team tracks time faster, and managers can approve with confidence."
       </p>
-      <p class="quote-author">Arieh F. <em>CFO</em></p>
+      <p class="quote-author">Daniel Ndobe <em>Invoke Solutions</em></p>
 
       <div class="trusted">
         <p>Trusted by world-class companies</p>
         <div class="logos">
           <span>Manpower</span>
           <span>TypeFox</span>
-          <span>KPMG</span>
+          <span>Invoke Solutions</span>
           <span>IMPARTNER</span>
         </div>
       </div>
@@ -135,8 +118,8 @@ async function onCreateOrganization() {
 
         <p v-if="error" class="error">{{ error }}</p>
 
-        <button class="btn" type="submit" :disabled="accountLoading || !accountReady">
-          {{ accountLoading ? "Creating account..." : "Next" }}
+        <button class="btn" type="submit" :disabled="!accountReady">
+          Next
         </button>
 
         <p class="muted small">
@@ -145,7 +128,7 @@ async function onCreateOrganization() {
         </p>
       </form>
 
-      <form v-else @submit.prevent="onCreateOrganization" class="form" aria-label="Create organization form">
+      <form v-else @submit.prevent="onCompleteRegistration" class="form" aria-label="Create organization form">
         <h2>Create your organization</h2>
         <p class="muted">Set up your workspace. You can invite your team later.</p>
 
@@ -156,8 +139,8 @@ async function onCreateOrganization() {
 
         <p v-if="error" class="error">{{ error }}</p>
 
-        <button class="btn" type="submit" :disabled="organizationLoading || !organizationName.trim()">
-          {{ organizationLoading ? "Creating organization..." : "Finish setup" }}
+        <button class="btn" type="submit" :disabled="registerLoading || !organizationName.trim()">
+          {{ registerLoading ? "Creating workspace..." : "Finish setup" }}
         </button>
       </form>
 

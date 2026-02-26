@@ -32,8 +32,14 @@ export function useAuth() {
         await navigateTo(getLandingPath(res.token))
     }
 
-    async function register(email: string, password: string, firstName: string, lastName: string) {
-        const res = await authApi.register({ email, password, firstName, lastName })
+    async function register(
+        email: string,
+        password: string,
+        firstName: string,
+        lastName: string,
+        organizationName: string
+    ) {
+        const res = await authApi.register({ email, password, firstName, lastName, organizationName })
 
         token.value = res.token
         user.value = {

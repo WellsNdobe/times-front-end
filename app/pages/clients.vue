@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ middleware: ["auth", "require-organization"] })
+definePageMeta({ middleware: ["auth"] })
 
 import { computed, onMounted, ref } from "vue"
 import { organizationsApi, type Organization } from "~/api/organizationsApi"
