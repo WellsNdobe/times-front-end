@@ -17,7 +17,7 @@ const members = ref<OrganizationMember[]>([])
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 
-const addMode = ref<"existing" | "create">("existing")
+const addMode = ref<"existing" | "create">("create")
 const addForm = ref({
     userId: "",
     email: "",

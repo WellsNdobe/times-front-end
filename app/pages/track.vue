@@ -45,6 +45,8 @@ const todayEntries = computed(() =>
 const todayTotalMinutes = computed(() =>
     todayEntries.value.reduce((total, entry) => total + (entry.durationMinutes ?? 0), 0)
 )
+const selectedDateLabel = computed(() => formatDateLong(workDate.value))
+const hasProjects = computed(() => activeProjects.value.length > 0)
 const elapsedSeconds = computed(() => {
     if (!running.value || !sessionStartedAt.value) return 0
     return Math.max(0, Math.floor((now.value - sessionStartedAt.value.getTime()) / 1000))
@@ -331,19 +333,28 @@ function formatMinutes(total: number) {
     if (!hours) return `${minutes}m`
     return `${hours}h ${minutes}m`
 }
+
+function formatDateLong(value: string) {
+    if (!value) return ""
+    const date = new Date(`${value}T00:00:00`)
+    if (Number.isNaN(date.getTime())) return value
+    return date.toLocaleDateString(undefined, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    })
+}
 </script>
 
 <template>
     <section class="card track">
         <header class="track__header">
             <div>
-                <h1 class="track__title">Track</h1>
+                <h1 class="track__title">Track time</h1>
                 <p v-if="org" class="track__subtitle">{{ org.name }}</p>
             </div>
-            <div class="track__status">
-                <span class="track__status-label">Timesheet</span>
-                <span class="track__status-value">{{ timesheetStatusLabel }}</span>
-            </div>
+            <p class="track__date">{{ selectedDateLabel }}</p>
         </header>
 
         <div v-if="error" class="alert" role="alert">
@@ -356,16 +367,20 @@ function formatMinutes(total: number) {
         </template>
 
         <template v-else>
-            <section class="track__panel">
-                <div class="track__timer-box">
-                    <p class="track__timer-label">Current session</p>
-                    <p class="track__timer">{{ elapsedDisplay }}</p>
-                    <p class="track__timer-hint">
-                        {{ running ? "Timer running" : "Ready to track" }}
-                    </p>
-                </div>
+            <div class="track__chips">
+                <span class="track-chip">Status: {{ timesheetStatusLabel }}</span>
+                <span class="track-chip">{{ formatMinutes(todayTotalMinutes) }} today</span>
+                <span class="track-chip">{{ todayEntries.length }} entries</span>
+            </div>
 
-                <div class="track__controls">
+            <div v-if="!isTimesheetEditable" class="track__notice" role="status">
+                Timesheet is {{ timesheetStatusLabel.toLowerCase() }}. Editing is disabled.
+            </div>
+
+            <section class="track__composer">
+                <p class="track__timer">{{ elapsedDisplay }}</p>
+
+                <div class="track__grid">
                     <label class="track__field">
                         <span>Project</span>
                         <select v-model="selectedProjectId" :disabled="running || !isTimesheetEditable">
@@ -386,7 +401,7 @@ function formatMinutes(total: number) {
                     </label>
 
                     <label class="track__field">
-                        <span>Manual minutes</span>
+                        <span>Minutes</span>
                         <input
                             v-model.number="manualMinutes"
                             type="number"
@@ -397,43 +412,59 @@ function formatMinutes(total: number) {
                         />
                     </label>
 
-                    <label class="track__field track__field--wide">
+                    <label class="track__field track__field--full">
                         <span>Notes</span>
                         <input
                             v-model.trim="notes"
                             type="text"
-                            placeholder="What did you work on?"
+                            placeholder="Optional"
                             :disabled="!isTimesheetEditable"
                         />
                     </label>
-
-                    <div class="track__actions">
-                        <button
-                            type="button"
-                            class="btn btn-primary"
-                            :disabled="running || saving || !isTimesheetEditable"
-                            @click="startTimer"
-                        >
-                            Start
-                        </button>
-                        <button
-                            type="button"
-                            class="btn btn-secondary"
-                            :disabled="!running || saving || !isTimesheetEditable"
-                            @click="stopAndSave"
-                        >
-                            {{ saving ? "Saving..." : "Stop & save" }}
-                        </button>
-                        <button
-                            type="button"
-                            class="btn btn-secondary"
-                            :disabled="running || saving || !isTimesheetEditable"
-                            @click="addManualEntry"
-                        >
-                            Add manual
-                        </button>
-                    </div>
                 </div>
+
+                <div class="track__actions">
+                    <button
+                        type="button"
+                        class="btn btn-primary"
+                        :disabled="
+                            running ||
+                            saving ||
+                            !isTimesheetEditable ||
+                            !selectedProjectId ||
+                            !hasProjects
+                        "
+                        @click="startTimer"
+                    >
+                        Start timer
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        :disabled="!running || saving || !isTimesheetEditable"
+                        @click="stopAndSave"
+                    >
+                        {{ saving ? "Saving..." : "Stop and save" }}
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        :disabled="
+                            running ||
+                            saving ||
+                            !isTimesheetEditable ||
+                            !hasProjects ||
+                            !selectedProjectId ||
+                            !manualMinutes ||
+                            manualMinutes <= 0
+                        "
+                        @click="addManualEntry"
+                    >
+                        Add minutes
+                    </button>
+                </div>
+
+                <p v-if="!hasProjects" class="muted">No active projects available.</p>
             </section>
 
             <div v-if="localError" class="alert alert--inline" role="alert">
@@ -443,7 +474,7 @@ function formatMinutes(total: number) {
 
             <section class="track__entries">
                 <div class="track__entries-head">
-                    <h2 class="track__entries-title">Daily log</h2>
+                    <h2 class="track__entries-title">Log</h2>
                     <p class="track__entries-total">{{ formatMinutes(todayTotalMinutes) }} today</p>
                 </div>
 
@@ -496,9 +527,9 @@ function formatMinutes(total: number) {
 .track__header {
     display: flex;
     justify-content: space-between;
-    align-items: flex-end;
+    align-items: center;
     gap: var(--s-4);
-    margin-bottom: var(--s-4);
+    margin-bottom: var(--s-3);
 }
 
 .track__title {
@@ -511,69 +542,62 @@ function formatMinutes(total: number) {
     color: var(--text-2);
 }
 
-.track__status {
-    text-align: right;
-}
-
-.track__status-label {
-    display: block;
-    font-size: 0.75rem;
-    color: var(--text-3);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 700;
-}
-
-.track__status-value {
-    font-weight: 700;
-}
-
-.track__panel {
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
-    padding: var(--s-4);
-    display: grid;
-    grid-template-columns: 220px 1fr;
-    gap: var(--s-4);
-    margin-bottom: var(--s-4);
-}
-
-.track__timer-box {
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface);
-    padding: var(--s-3);
-}
-
-.track__timer-label {
+.track__date {
     margin: 0;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
-    font-weight: 700;
+    color: var(--text-2);
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.track__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+}
+
+.track-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 var(--s-2);
+    background: var(--surface-2);
+    font-size: 0.875rem;
 }
 
 .track__timer {
-    margin: var(--s-2) 0 var(--s-1) 0;
-    font-size: 2rem;
+    margin: 0 0 var(--s-3) 0;
+    font-size: 2.25rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
     line-height: 1;
 }
 
-.track__timer-hint {
-    margin: 0;
+.track__notice {
+    margin-bottom: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    padding: var(--s-2) var(--s-3);
     color: var(--text-2);
     font-size: 0.875rem;
 }
 
-.track__controls {
+.track__composer {
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: linear-gradient(165deg, var(--surface-2) 0%, var(--surface) 100%);
+    padding: var(--s-3);
+    margin-bottom: var(--s-3);
+}
+
+.track__grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(140px, 1fr));
+    grid-template-columns: repeat(3, minmax(160px, 1fr));
     gap: var(--s-3);
-    align-items: end;
+    margin-bottom: var(--s-3);
 }
 
 .track__field {
@@ -588,15 +612,15 @@ function formatMinutes(total: number) {
     font-weight: 600;
 }
 
-.track__field--wide {
+.track__field--full {
     grid-column: 1 / -1;
 }
 
 .track__actions {
-    grid-column: 1 / -1;
     display: flex;
     gap: var(--s-2);
     flex-wrap: wrap;
+    margin-bottom: var(--s-2);
 }
 
 .track__entries {
@@ -667,16 +691,24 @@ function formatMinutes(total: number) {
 }
 
 @media (max-width: 980px) {
-    .track__panel {
-        grid-template-columns: 1fr;
-    }
-
-    .track__controls {
-        grid-template-columns: 1fr;
+    .track__grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
 @media (max-width: 760px) {
+    .track {
+        padding: var(--s-4);
+    }
+    .track__header {
+        align-items: flex-start;
+        gap: var(--s-2);
+        flex-direction: column;
+    }
+    .track__grid {
+        grid-template-columns: 1fr;
+    }
+
     .track-table,
     .track-table thead,
     .track-table tbody,
