@@ -67,12 +67,9 @@ async function onCompleteRegistration() {
       <p class="quote-author">Daniel Ndobe <em>Invoke Solutions</em></p>
 
       <div class="trusted">
-        <p>Trusted by world-class companies</p>
+        <p>Trusted by</p>
         <div class="logos">
-          <span>Manpower</span>
-          <span>TypeFox</span>
           <span>Invoke Solutions</span>
-          <span>IMPARTNER</span>
         </div>
       </div>
     </aside>

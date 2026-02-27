@@ -39,10 +39,7 @@ async function onSubmit() {
       <div class="trusted">
         <p>Trusted by world-class companies</p>
         <div class="logos">
-          <span>Manpower</span>
-          <span>TypeFox</span>
           <span>Invoke Solutions</span>
-          <span>IMPARTNER</span>
         </div>
       </div>
     </aside>
