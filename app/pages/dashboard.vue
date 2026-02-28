@@ -4,21 +4,14 @@ definePageMeta({ middleware: ["auth", "manager-only"] })
 import { computed, onMounted, ref, watch } from "vue"
 import { useAuth } from "~/composables/useAuth"
 import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
-import { projectsApi, type Project } from "~/api/projectsApi"
-import { clientsApi, type Client } from "~/api/clientsApi"
-import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
-import { timesheetEntriesApi, type TimesheetEntry } from "~/api/timesheetEntriesApi"
+import { reportingApi, type DashboardReport } from "~/api/reportingApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
 const { user } = useAuth()
 
 const org = ref<Organization | null>(null)
 const members = ref<OrganizationMember[]>([])
-const projects = ref<Project[]>([])
-const clients = ref<Client[]>([])
-const orgTimesheets = ref<Timesheet[]>([])
-const orgEntries = ref<TimesheetEntry[]>([])
-const pendingApprovalCount = ref(0)
+const dashboard = ref<DashboardReport | null>(null)
 
 const loading = ref(true)
 const error = ref<UiError | null>(null)
@@ -57,23 +50,15 @@ const isManagerOrAdmin = computed(() => {
 })
 
 const statusSummary = computed(() => {
-    let submitted = 0
-    let approved = 0
-    let rejected = 0
-    let draft = 0
-    for (const ts of orgTimesheets.value) {
-        if (ts.status === 1) submitted++
-        else if (ts.status === 2) approved++
-        else if (ts.status === 3) rejected++
-        else draft++
-    }
-    return {
-        total: orgTimesheets.value.length,
-        submitted,
-        approved,
-        rejected,
-        draft,
-    }
+    return (
+        dashboard.value?.statusSummary ?? {
+            total: 0,
+            submitted: 0,
+            approved: 0,
+            rejected: 0,
+            draft: 0,
+        }
+    )
 })
 const statusSummaryLabel = computed(() => {
     if (!statusSummary.value.total) return "No data"
@@ -82,7 +67,7 @@ const statusSummaryLabel = computed(() => {
 })
 const statusSummaryMeta = computed(() => {
     if (!statusSummary.value.total) return "No timesheets for this week."
-    return `${statusSummary.value.approved} approved • ${statusSummary.value.draft} draft • ${statusSummary.value.rejected} rejected`
+    return `${statusSummary.value.approved} approved | ${statusSummary.value.draft} draft | ${statusSummary.value.rejected} rejected`
 })
 const statusSummaryPill = computed(() => {
     if (!statusSummary.value.total) return "No data"
@@ -97,9 +82,8 @@ const statusToneClass = computed(() => {
     return "kpi__pill--info"
 })
 
-const weekMinutes = computed(() =>
-    orgEntries.value.reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
-)
+const teamSize = computed(() => dashboard.value?.teamSize ?? 0)
+const weekMinutes = computed(() => dashboard.value?.weekTotalMinutes ?? 0)
 const weekHours = computed(() => (weekMinutes.value / 60).toFixed(1))
 const weekTargetHours = computed(() => teamSize.value * 40)
 const weekProgressPercent = computed(() =>
@@ -107,101 +91,57 @@ const weekProgressPercent = computed(() =>
         ? Math.min(100, Math.round((Number(weekHours.value) / weekTargetHours.value) * 100))
         : 0
 )
-const todayMinutes = computed(() =>
-    orgEntries.value
-        .filter((entry) => entry.workDate === today)
-        .reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
-)
-const todayEntriesCount = computed(
-    () => orgEntries.value.filter((entry) => entry.workDate === today).length
-)
-const activeProjectsCount = computed(
-    () => projects.value.filter((project) => project.isActive !== false).length
-)
-const teamSize = computed(() => members.value.filter((m) => m.isActive).length)
-
-const projectNameById = computed(() => {
-    const map = new Map<string, string>()
-    for (const project of projects.value) map.set(project.id, project.name ?? "Unnamed project")
-    return map
-})
-const clientNameById = computed(() => {
-    const map = new Map<string, string>()
-    for (const client of clients.value) map.set(client.id, client.name ?? "Unnamed client")
-    return map
-})
+const todayMinutes = computed(() => dashboard.value?.todayTotalMinutes ?? 0)
+const todayEntriesCount = computed(() => dashboard.value?.todayEntriesCount ?? 0)
+const activeProjectsCount = computed(() => dashboard.value?.activeProjectsCount ?? 0)
+const clientsCount = computed(() => dashboard.value?.clientsCount ?? 0)
+const pendingApprovalCount = computed(() => dashboard.value?.pendingApprovalCount ?? 0)
 
 const hoursByProject = computed(() => {
-    const visibleProjects = selectedClientFilter.value
-        ? projects.value.filter((project) => (project.clientId ?? "unassigned") === selectedClientFilter.value)
-        : projects.value
-    const visibleProjectIds = new Set(visibleProjects.map((project) => project.id))
+    const source = dashboard.value?.hoursByProject ?? []
+    const filtered = source.filter((item) => {
+        const clientKey = item.clientId ?? "unassigned"
+        return !selectedClientFilter.value || clientKey === selectedClientFilter.value
+    })
 
-    const totals = new Map<string, number>()
-    for (const entry of orgEntries.value) {
-        if (!visibleProjectIds.has(entry.projectId)) continue
-        totals.set(entry.projectId, (totals.get(entry.projectId) ?? 0) + (entry.durationMinutes ?? 0))
-    }
-    const max = Math.max(...totals.values(), 0)
-    return [...totals.entries()]
-        .map(([projectId, totalMinutes]) => ({
-            projectId,
-            label: projectNameById.value.get(projectId) ?? "Unknown project",
-            totalMinutes,
-            percent: max ? Math.round((totalMinutes / max) * 100) : 0,
+    const max = Math.max(...filtered.map((item) => item.totalMinutes), 0)
+    return filtered
+        .map((item) => ({
+            projectId: item.projectId,
+            label: item.projectName || "Unknown project",
+            totalMinutes: item.totalMinutes ?? 0,
+            percent: max ? Math.round(((item.totalMinutes ?? 0) / max) * 100) : 0,
         }))
         .sort((a, b) => b.totalMinutes - a.totalMinutes)
         .slice(0, 6)
 })
 
 const hoursByClient = computed(() => {
-    const projectClientMap = new Map<string, string>()
-    for (const project of projects.value) {
-        projectClientMap.set(project.id, project.clientId ?? "unassigned")
-    }
-    const totals = new Map<string, number>()
-    for (const entry of orgEntries.value) {
-        const clientId = projectClientMap.get(entry.projectId) ?? "unassigned"
-        totals.set(clientId, (totals.get(clientId) ?? 0) + (entry.durationMinutes ?? 0))
-    }
-    const max = Math.max(...totals.values(), 0)
-    return [...totals.entries()]
-        .map(([clientId, totalMinutes]) => ({
-            clientId,
-            label:
-                clientId === "unassigned"
-                    ? "Unassigned"
-                    : clientNameById.value.get(clientId) ?? "Unknown client",
-            totalMinutes,
-            percent: max ? Math.round((totalMinutes / max) * 100) : 0,
+    const source = dashboard.value?.hoursByClient ?? []
+    const max = Math.max(...source.map((item) => item.totalMinutes), 0)
+    return source
+        .map((item) => ({
+            clientId: item.clientId ?? "unassigned",
+            label: item.clientName || "Unassigned",
+            totalMinutes: item.totalMinutes ?? 0,
+            percent: max ? Math.round(((item.totalMinutes ?? 0) / max) * 100) : 0,
         }))
         .sort((a, b) => b.totalMinutes - a.totalMinutes)
         .slice(0, 6)
 })
 
 const weekTrend = computed(() => {
-    const start = new Date(weekStartDate.value)
-    const days: Array<{ date: string; label: string; totalMinutes: number; height: number }> = []
-    const totalsByDate = new Map<string, number>()
-    for (const entry of orgEntries.value) {
-        totalsByDate.set(entry.workDate, (totalsByDate.get(entry.workDate) ?? 0) + (entry.durationMinutes ?? 0))
-    }
-    for (let i = 0; i < 7; i++) {
-        const day = new Date(start)
-        day.setDate(start.getDate() + i)
-        const key = formatDateForInput(day)
-        days.push({
-            date: key,
-            label: day.toLocaleDateString(undefined, { weekday: "short" }),
-            totalMinutes: totalsByDate.get(key) ?? 0,
-            height: 0,
-        })
-    }
-    const max = Math.max(...days.map((d) => d.totalMinutes), 0)
-    return days.map((day) => ({
-        ...day,
-        height: max ? Math.max(8, Math.round((day.totalMinutes / max) * 100)) : 8,
-    }))
+    const source = dashboard.value?.weekTrend ?? []
+    const max = Math.max(...source.map((item) => item.totalMinutes), 0)
+    return source.map((item) => {
+        const date = new Date(item.workDate)
+        return {
+            date: item.workDate,
+            label: date.toLocaleDateString(undefined, { weekday: "short" }),
+            totalMinutes: item.totalMinutes ?? 0,
+            height: max ? Math.max(8, Math.round(((item.totalMinutes ?? 0) / max) * 100)) : 8,
+        }
+    })
 })
 
 onMounted(() => loadDashboard())
@@ -224,36 +164,16 @@ async function loadDashboard() {
         if (!firstOrg) return
         org.value = firstOrg
 
-        const [membersResult, projectsResult, clientsResult, orgTimesheetsResult] = await Promise.all([
+        const [membersResult, dashboardResult] = await Promise.all([
             organizationsApi.getMembers(org.value.id),
-            projectsApi.list(org.value.id),
-            clientsApi.list(org.value.id),
-            timesheetsApi.listOrg(org.value.id, {
-                fromWeekStart: weekStartDate.value,
-                toWeekStart: weekStartDate.value,
+            reportingApi.getDashboard(org.value.id, {
+                weekStart: weekStartDate.value,
+                todayDate: today,
             }),
         ])
 
         members.value = membersResult
-        projects.value = projectsResult
-        clients.value = clientsResult
-
-        orgTimesheets.value = orgTimesheetsResult
-        if (orgTimesheets.value.length) {
-            const entriesByTimesheet = await Promise.all(
-                orgTimesheets.value.map((ts) => timesheetEntriesApi.list(org.value!.id, ts.id))
-            )
-            orgEntries.value = entriesByTimesheet.flat()
-        } else {
-            orgEntries.value = []
-        }
-
-        if (myMember.value && (myMember.value.role === 0 || myMember.value.role === 1)) {
-            const pending = await timesheetsApi.listPendingApproval(org.value.id)
-            pendingApprovalCount.value = pending.length
-        } else {
-            pendingApprovalCount.value = 0
-        }
+        dashboard.value = dashboardResult
     } catch (e) {
         console.error("Load dashboard error:", e)
         error.value = toUiError(e)
@@ -375,7 +295,7 @@ function toggleClientFilter(clientId: string) {
                 <article class="card kpi">
                     <p class="kpi__label">Workspace</p>
                     <p class="kpi__value">{{ activeProjectsCount }} active projects</p>
-                    <p class="kpi__meta">{{ clients.length }} clients | {{ teamSize }} team members</p>
+                    <p class="kpi__meta">{{ clientsCount }} clients | {{ teamSize }} team members</p>
                 </article>
 
                 <article v-if="isManagerOrAdmin" class="card kpi kpi--accent">
@@ -822,3 +742,4 @@ function toggleClientFilter(clientId: string) {
     }
 }
 </style>
+

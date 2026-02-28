@@ -2,24 +2,16 @@
 definePageMeta({ middleware: ["auth"] })
 
 import { computed, onMounted, ref } from "vue"
-import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
+import { organizationsApi, type Organization } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { clientsApi, type Client } from "~/api/clientsApi"
-import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
-import { timesheetEntriesApi, type TimesheetEntry } from "~/api/timesheetEntriesApi"
+import { reportingApi, type ReportsDataset } from "~/api/reportingApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
-type ReportRow = TimesheetEntry & {
-    timesheetStatus?: number
-    timesheetWeekStart?: string
-}
-
 const org = ref<Organization | null>(null)
-const members = ref<OrganizationMember[]>([])
 const projects = ref<Project[]>([])
 const clients = ref<Client[]>([])
-const timesheets = ref<Timesheet[]>([])
-const rows = ref<ReportRow[]>([])
+const report = ref<ReportsDataset | null>(null)
 
 const loading = ref(true)
 const error = ref<UiError | null>(null)
@@ -31,154 +23,66 @@ const selectedClientId = ref("")
 const selectedProjectId = ref("")
 const selectedStatus = ref("")
 
-const projectById = computed(() => {
-    const map = new Map<string, Project>()
-    for (const project of projects.value) map.set(project.id, project)
-    return map
-})
-const clientById = computed(() => {
-    const map = new Map<string, Client>()
-    for (const client of clients.value) map.set(client.id, client)
-    return map
-})
-const memberNameByUserId = computed(() => {
-    const map = new Map<string, string>()
-    for (const member of members.value) {
-        const fullName = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
-        map.set(member.userId, fullName || member.userId)
-    }
-    return map
-})
-const timesheetUserIdById = computed(() => {
-    const map = new Map<string, string>()
-    for (const sheet of timesheets.value) {
-        if (!sheet.id || !sheet.userId) continue
-        map.set(sheet.id, sheet.userId)
-    }
-    return map
-})
-
-const filteredRows = computed(() => {
-    return rows.value.filter((row) => {
-        if (selectedStatus.value && String(row.timesheetStatus ?? "") !== selectedStatus.value) {
-            return false
-        }
-        if (selectedProjectId.value && row.projectId !== selectedProjectId.value) return false
-        if (selectedClientId.value) {
-            const project = projectById.value.get(row.projectId)
-            const clientId = project?.clientId ?? ""
-            if (clientId !== selectedClientId.value) return false
-        }
-        return true
-    })
-})
-
-const filteredTimesheets = computed(() => {
-    if (!selectedClientId.value && !selectedProjectId.value) {
-        return timesheets.value.filter((sheet) => {
-            if (!selectedStatus.value) return true
-            return String(sheet.status ?? "") === selectedStatus.value
-        })
-    }
-    const sheetIds = new Set(filteredRows.value.map((row) => row.timesheetId ?? ""))
-    return timesheets.value.filter((sheet) => {
-        if (!sheetIds.has(sheet.id)) return false
-        if (!selectedStatus.value) return true
-        return String(sheet.status ?? "") === selectedStatus.value
-    })
-})
-
-const totalMinutes = computed(() =>
-    filteredRows.value.reduce((sum, row) => sum + (row.durationMinutes ?? 0), 0)
-)
-const totalHours = computed(() => (totalMinutes.value / 60).toFixed(1))
-const totalEntries = computed(() => filteredRows.value.length)
-const touchedProjects = computed(() => new Set(filteredRows.value.map((r) => r.projectId)).size)
+const totalMinutes = computed(() => report.value?.totalMinutes ?? 0)
+const totalHours = computed(() => (report.value?.totalHours ?? 0).toFixed(1))
+const totalEntries = computed(() => report.value?.totalEntries ?? 0)
+const touchedProjects = computed(() => report.value?.touchedProjects ?? 0)
+const timesheetsInRange = computed(() => report.value?.timesheetsInRange ?? 0)
 
 const statusCounts = computed(() => {
-    const counts = { draft: 0, submitted: 0, approved: 0, rejected: 0 }
-    for (const sheet of filteredTimesheets.value) {
-        if (sheet.status === 1) counts.submitted++
-        else if (sheet.status === 2) counts.approved++
-        else if (sheet.status === 3) counts.rejected++
-        else counts.draft++
+    const summary = report.value?.statusSummary
+    return {
+        draft: summary?.draft ?? 0,
+        submitted: summary?.submitted ?? 0,
+        approved: summary?.approved ?? 0,
+        rejected: summary?.rejected ?? 0,
     }
-    return counts
 })
 
 const hoursByProject = computed(() => {
-    const totals = new Map<string, number>()
-    for (const row of filteredRows.value) {
-        totals.set(row.projectId, (totals.get(row.projectId) ?? 0) + (row.durationMinutes ?? 0))
-    }
-    const max = Math.max(...totals.values(), 0)
-    return [...totals.entries()]
-        .map(([projectId, minutes]) => ({
-            projectId,
-            label: projectById.value.get(projectId)?.name ?? "Unknown project",
-            minutes,
-            percent: max ? Math.round((minutes / max) * 100) : 0,
-        }))
-        .sort((a, b) => b.minutes - a.minutes)
+    const source = report.value?.hoursByProject ?? []
+    const max = Math.max(...source.map((item) => item.totalMinutes), 0)
+    return source.map((item) => ({
+        projectId: item.projectId,
+        label: item.projectName || "Unknown project",
+        minutes: item.totalMinutes ?? 0,
+        percent: max ? Math.round(((item.totalMinutes ?? 0) / max) * 100) : 0,
+    }))
 })
 
 const hoursByClient = computed(() => {
-    const totals = new Map<string, number>()
-    for (const row of filteredRows.value) {
-        const project = projectById.value.get(row.projectId)
-        const clientId = project?.clientId ?? "unassigned"
-        totals.set(clientId, (totals.get(clientId) ?? 0) + (row.durationMinutes ?? 0))
-    }
-    const max = Math.max(...totals.values(), 0)
-    return [...totals.entries()]
-        .map(([clientId, minutes]) => ({
-            clientId,
-            label:
-                clientId === "unassigned"
-                    ? "Unassigned"
-                    : clientById.value.get(clientId)?.name ?? "Unknown client",
-            minutes,
-            percent: max ? Math.round((minutes / max) * 100) : 0,
-        }))
-        .sort((a, b) => b.minutes - a.minutes)
+    const source = report.value?.hoursByClient ?? []
+    const max = Math.max(...source.map((item) => item.totalMinutes), 0)
+    return source.map((item) => ({
+        clientId: item.clientId ?? "unassigned",
+        label: item.clientName || "Unassigned",
+        minutes: item.totalMinutes ?? 0,
+        percent: max ? Math.round(((item.totalMinutes ?? 0) / max) * 100) : 0,
+    }))
 })
 
 const hoursByEmployee = computed(() => {
-    const totals = new Map<string, number>()
-    for (const row of filteredRows.value) {
-        const timesheetId = row.timesheetId ?? ""
-        const userId = timesheetUserIdById.value.get(timesheetId) ?? "unknown"
-        totals.set(userId, (totals.get(userId) ?? 0) + (row.durationMinutes ?? 0))
-    }
-    const max = Math.max(...totals.values(), 0)
-    return [...totals.entries()]
-        .map(([userId, minutes]) => ({
-            userId,
-            label:
-                userId === "unknown"
-                    ? "Unknown employee"
-                    : memberNameByUserId.value.get(userId) ?? "Unknown employee",
-            minutes,
-            percent: max ? Math.round((minutes / max) * 100) : 0,
-        }))
-        .sort((a, b) => b.minutes - a.minutes)
+    const source = report.value?.hoursByEmployee ?? []
+    const max = Math.max(...source.map((item) => item.totalMinutes), 0)
+    return source.map((item) => ({
+        userId: item.userId,
+        label: item.employeeName || "Unknown employee",
+        minutes: item.totalMinutes ?? 0,
+        percent: max ? Math.round(((item.totalMinutes ?? 0) / max) * 100) : 0,
+    }))
 })
 
 const weeklyTrend = computed(() => {
-    const totals = new Map<string, number>()
-    for (const row of filteredRows.value) {
-        const weekStart = formatDateForInput(getWeekStart(new Date(row.workDate)))
-        totals.set(weekStart, (totals.get(weekStart) ?? 0) + (row.durationMinutes ?? 0))
-    }
-    const points = [...totals.entries()]
-        .map(([weekStart, minutes]) => ({ weekStart, minutes }))
-        .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
-    const max = Math.max(...points.map((p) => p.minutes), 0)
-    return points.map((point) => ({
-        ...point,
-        percent: max ? Math.max(8, Math.round((point.minutes / max) * 100)) : 8,
+    const source = report.value?.weeklyTrend ?? []
+    const max = Math.max(...source.map((item) => item.totalMinutes), 0)
+    return source.map((item) => ({
+        weekStart: item.weekStartDate,
+        minutes: item.totalMinutes ?? 0,
+        percent: max ? Math.max(8, Math.round(((item.totalMinutes ?? 0) / max) * 100)) : 8,
     }))
 })
+
+const detailedRows = computed(() => report.value?.detailedRows ?? [])
 
 onMounted(() => loadReports())
 
@@ -195,41 +99,40 @@ async function loadReports() {
         if (!firstOrg) return
         org.value = firstOrg
 
-        const [membersResult, projectsResult, clientsResult, sheets] = await Promise.all([
-            organizationsApi.getMembers(org.value.id),
+        const [projectsResult, clientsResult, reportResult] = await Promise.all([
             projectsApi.list(org.value.id),
             clientsApi.list(org.value.id),
-            timesheetsApi.listOrg(org.value.id, {
-                fromWeekStart: fromWeekStart.value,
-                toWeekStart: toWeekStart.value,
-            }),
+            reportingApi.getReports(org.value.id, buildReportParams()),
         ])
-        members.value = membersResult
+
         projects.value = projectsResult
         clients.value = clientsResult
-        timesheets.value = sheets
-
-        const entryGroups = await Promise.all(
-            sheets.map(async (sheet) => {
-                try {
-                    const entries = await timesheetEntriesApi.list(org.value!.id, sheet.id)
-                    return entries.map((entry) => ({
-                        ...entry,
-                        timesheetStatus: sheet.status,
-                        timesheetWeekStart: sheet.weekStartDate,
-                    }))
-                } catch {
-                    return [] as ReportRow[]
-                }
-            })
-        )
-        rows.value = entryGroups.flat()
+        report.value = reportResult
     } catch (e) {
         console.error("Load reports error:", e)
         error.value = toUiError(e)
     } finally {
         loading.value = false
     }
+}
+
+function buildReportParams() {
+    const params: {
+        fromWeekStart: string
+        toWeekStart: string
+        clientId?: string
+        projectId?: string
+        status?: number
+    } = {
+        fromWeekStart: fromWeekStart.value,
+        toWeekStart: toWeekStart.value,
+    }
+
+    if (selectedClientId.value) params.clientId = selectedClientId.value
+    if (selectedProjectId.value) params.projectId = selectedProjectId.value
+    if (selectedStatus.value !== "") params.status = Number(selectedStatus.value)
+
+    return params
 }
 
 function resetFilters() {
@@ -325,24 +228,18 @@ function exportStatusSummary() {
 function exportDetailedRows() {
     downloadCsv(
         "detailed_time_entries.csv",
-        ["week_start", "work_date", "project", "client", "status", "minutes", "hours", "notes"],
-        filteredRows.value.map((row) => {
-            const project = projectById.value.get(row.projectId)
-            const clientName =
-                project?.clientId && clientById.value.get(project.clientId)
-                    ? clientById.value.get(project.clientId)!.name
-                    : "Unassigned"
-            return [
-                row.timesheetWeekStart ?? "",
-                row.workDate,
-                project?.name ?? "Unknown project",
-                clientName,
-                formatStatus(row.timesheetStatus),
-                row.durationMinutes ?? 0,
-                ((row.durationMinutes ?? 0) / 60).toFixed(2),
-                row.notes ?? "",
-            ]
-        })
+        ["week_start", "work_date", "employee", "project", "client", "status", "minutes", "hours", "notes"],
+        detailedRows.value.map((row) => [
+            row.timesheetWeekStartDate,
+            row.workDate,
+            row.employeeName,
+            row.projectName,
+            row.clientName,
+            formatStatus(row.timesheetStatus),
+            row.durationMinutes,
+            (row.durationMinutes / 60).toFixed(2),
+            row.notes ?? "",
+        ])
     )
 }
 </script>
@@ -448,7 +345,7 @@ function exportDetailedRows() {
                 </article>
                 <article class="card kpi">
                     <p class="kpi__label">Timesheets in range</p>
-                    <p class="kpi__value">{{ filteredTimesheets.length }}</p>
+                    <p class="kpi__value">{{ timesheetsInRange }}</p>
                 </article>
             </section>
 
@@ -817,3 +714,4 @@ function exportDetailedRows() {
     }
 }
 </style>
+
