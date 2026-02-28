@@ -76,8 +76,8 @@ async function onAddMember() {
         if (addMode.value === "existing") {
             if (!addForm.value.userId.trim()) {
                 addError.value = {
-                    title: "Missing user id",
-                    message: "Enter a valid user id before adding an existing user.",
+                    title: "Missing user identifier",
+                    message: "Enter a valid profile identifier before adding an existing user.",
                 }
                 return
             }
@@ -167,11 +167,8 @@ const statusLabel = (member: OrganizationMember) => (member.isActive ? "Active" 
 
 const memberDisplayName = (member: OrganizationMember) => {
     const name = [member.firstName, member.lastName].filter(Boolean).join(" ")
-    return name || member.userId || "Unknown member"
+    return name || "Unknown member"
 }
-
-const memberMeta = (member: OrganizationMember) =>
-    member.userId ? `ID: ${member.userId}` : "Active team member"
 </script>
 
 <template>
@@ -227,7 +224,7 @@ const memberMeta = (member: OrganizationMember) =>
                             autocomplete="off"
                         />
                         <span class="form-field__hint">
-                            Ask the user for their profile ID if they already have an account.
+                            Ask the user for their profile identifier if they already have an account.
                         </span>
                     </label>
                     <template v-else>
@@ -308,7 +305,6 @@ const memberMeta = (member: OrganizationMember) =>
                         <tr v-for="member in members" :key="member.id">
                             <td>
                                 <span class="member-name">{{ memberDisplayName(member) }}</span>
-                                <span class="member-meta">{{ memberMeta(member) }}</span>
                             </td>
                             <td>
                                 <template v-if="editingMemberId === member.id">
@@ -459,12 +455,6 @@ const memberMeta = (member: OrganizationMember) =>
 .member-name {
     display: block;
     font-weight: 600;
-}
-
-.member-meta {
-    display: block;
-    font-size: 0.875rem;
-    color: var(--text-2);
 }
 
 .edit-role {

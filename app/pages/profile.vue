@@ -106,6 +106,7 @@ const avatarUrl = computed(
 
 const isAdmin = computed(() => myMember.value?.role === 0)
 const memberStatus = computed(() => (myMember.value?.isActive ? "Active" : "Inactive"))
+const profileUserId = computed(() => user.value?.userId ?? "-")
 const orgName = computed(() => org.value?.name ?? "-")
 const teamSize = computed(() => members.value.length)
 const memberSince = computed(() => {
@@ -167,7 +168,7 @@ function roleLabelByValue(role?: number) {
 
 function memberDisplayName(member: OrganizationMember) {
   const name = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
-  return name || member.userId || "Unknown user"
+  return name || "Unknown user"
 }
 
 function storageKey(kind: "personal" | "workflow" | "org") {
@@ -333,6 +334,10 @@ function toggleSection(section: keyof typeof openSections.value) {
             <div>
               <span class="profile__label">Member since</span>
               <strong>{{ memberSince }}</strong>
+            </div>
+            <div>
+              <span class="profile__label">Profile ID</span>
+              <strong class="profile__id">{{ profileUserId }}</strong>
             </div>
           </div>
         </article>
@@ -589,8 +594,13 @@ function toggleSection(section: keyof typeof openSections.value) {
 
 .profile__summary-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--s-3);
+}
+
+.profile__id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.95rem;
 }
 
 .profile__label {

@@ -55,9 +55,9 @@ const isManagerOrAdmin = computed(() => {
 function displayName(userId?: string) {
     if (!userId) return "Unknown member"
     const member = memberMap.value.get(userId)
-    if (!member) return userId
+    if (!member) return "Unknown member"
     const name = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
-    return name || member.userId
+    return name || "Unknown member"
 }
 
 function formatDate(date?: string) {

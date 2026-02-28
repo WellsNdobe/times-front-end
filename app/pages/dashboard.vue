@@ -23,7 +23,8 @@ const pendingApprovalCount = ref(0)
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 
-const weekStartDate = ref(formatDateForInput(getWeekStart(new Date())))
+const currentWeekStart = computed(() => formatDateForInput(getWeekStart(new Date())))
+const weekStartDate = ref(currentWeekStart.value)
 const today = formatDateForInput(new Date())
 const selectedClientFilter = ref<string | null>(null)
 
@@ -33,9 +34,8 @@ const weekLabel = computed(() => {
     end.setDate(start.getDate() + 6)
     return `${formatShortDate(start)} - ${formatShortDate(end)}`
 })
-const isCurrentWeek = computed(
-    () => weekStartDate.value === formatDateForInput(getWeekStart(new Date()))
-)
+const isCurrentWeek = computed(() => weekStartDate.value === currentWeekStart.value)
+const isAtLatestWeek = computed(() => weekStartDate.value >= currentWeekStart.value)
 
 const myMember = computed(() => {
     if (!user.value?.userId) return null
@@ -292,10 +292,12 @@ function formatMinutes(total: number) {
 function shiftWeek(direction: -1 | 1) {
     const base = new Date(weekStartDate.value)
     base.setDate(base.getDate() + direction * 7)
-    weekStartDate.value = formatDateForInput(getWeekStart(base))
+    const nextWeek = formatDateForInput(getWeekStart(base))
+    weekStartDate.value = nextWeek > currentWeekStart.value ? currentWeekStart.value : nextWeek
 }
 
 function goToThisWeek() {
+    if (isCurrentWeek.value) return
     weekStartDate.value = formatDateForInput(getWeekStart(new Date()))
 }
 
@@ -323,7 +325,7 @@ function toggleClientFilter(clientId: string) {
                     >
                         This week
                     </button>
-                    <button type="button" class="btn btn-secondary btn-sm" @click="shiftWeek(1)">
+                    <button type="button" class="btn btn-secondary btn-sm" :disabled="isAtLatestWeek" @click="shiftWeek(1)">
                         Next week
                     </button>
                 </div>

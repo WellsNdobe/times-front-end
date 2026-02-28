@@ -186,9 +186,9 @@ const unassignLoadingUserId = ref<string | null>(null)
 function memberDisplayNameByUserId(userId?: string) {
     if (!userId) return "Unknown member"
     const member = memberMap.value.get(userId)
-    if (!member) return userId
+    if (!member) return "Unknown member"
     const name = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
-    return name || member.userId
+    return name || "Unknown member"
 }
 
 const assignedUserIds = computed(() => new Set(assignments.value.map((a) => a.userId)))
@@ -457,7 +457,6 @@ async function onUnassignUser(userId: string) {
                                             <li v-for="a in assignments" :key="a.id" class="assignments__item">
                                                 <div class="assignments__who">
                                                     <span class="assignments__name">{{ memberDisplayNameByUserId(a.userId) }}</span>
-                                                    <span class="assignments__meta">{{ a.userId }}</span>
                                                 </div>
                                                 <button
                                                     v-if="isManagerOrAdmin"
@@ -729,11 +728,6 @@ async function onUnassignUser(userId: string) {
 
 .assignments__name {
     font-weight: 600;
-}
-
-.assignments__meta {
-    color: var(--text-3);
-    font-size: 0.75rem;
 }
 
 .assignments__add {

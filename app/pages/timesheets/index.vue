@@ -17,6 +17,7 @@ type TimesheetEntryRow = Omit<TimesheetEntry, "durationMinutes"> & {
     isNew?: boolean
     isSaving?: boolean
     isDeleting?: boolean
+    lastSavedSignature?: string | null
     error?: UiError | null
 }
 
@@ -57,9 +58,9 @@ const timesheetStatusLabel = computed(() => {
 
 const submitButtonLabel = computed(() => {
     if (submitting.value) return "Submitting..."
-    if (timesheet.value?.status === 1) return "Submitted"
+    if (timesheet.value?.status === 1) return "Already submitted"
     if (timesheet.value?.status === 2) return "Approved"
-    if (timesheet.value?.status === 3) return "Update"
+    if (timesheet.value?.status === 3) return "Resubmit timesheet"
     return "Submit timesheet"
 })
 
@@ -79,6 +80,15 @@ const rejectionReason = computed(() => {
     return typeof reason === "string" && reason.trim().length
         ? reason.trim()
         : "No rejection reason was provided."
+})
+const readOnlyBannerMessage = computed(() => {
+    if (timesheet.value?.status === 1) {
+        return "This timesheet is submitted. Rows are locked while it awaits approval."
+    }
+    if (timesheet.value?.status === 2) {
+        return "This timesheet is approved. Rows are now read-only."
+    }
+    return ""
 })
 
 const workingDays = computed<WorkingDay[]>(() => getWorkingDays(weekStartDate.value))
@@ -116,6 +126,7 @@ function addEntryRow(workDate: string) {
         endTime: null,
         durationMinutes: null,
         notes: null,
+        lastSavedSignature: null,
         error: null,
     }
     entries.value = [...entries.value, row]
@@ -166,7 +177,11 @@ async function loadSelectedWeek() {
 
 async function loadEntries(organizationId: string, timesheetId: string) {
     const result = await timesheetEntriesApi.list(organizationId, timesheetId)
-    return result.map((entry) => ({ ...entry, error: null }))
+    return result.map((entry) => {
+        const row: TimesheetEntryRow = { ...entry, error: null, isNew: false }
+        row.lastSavedSignature = getEntrySignature(row)
+        return row
+    })
 }
 
 function moveWeek(offset: number) {
@@ -209,20 +224,14 @@ async function saveEntry(entry: TimesheetEntryRow) {
     }
     entry.isSaving = true
     try {
-        const payload: TimesheetEntryPayload = {
-            projectId: entry.projectId,
-            taskId: entry.taskId ?? null,
-            workDate: entry.workDate,
-            startTime: entry.startTime || null,
-            endTime: entry.endTime || null,
-            durationMinutes: normalizeDurationMinutes(entry.durationMinutes),
-            notes: entry.notes || null,
-        }
+        const payload = buildEntryPayload(entry)
         const saved = entry.isNew
             ? await timesheetEntriesApi.create(org.value.id, timesheet.value.id, payload)
             : await timesheetEntriesApi.update(org.value.id, timesheet.value.id, entry.id, payload)
+        const nextRow: TimesheetEntryRow = { ...saved, error: null, isNew: false }
+        nextRow.lastSavedSignature = getEntrySignature(nextRow)
         entries.value = entries.value.map((row) =>
-            row.id === entry.id ? { ...saved, error: null } : row
+            row.id === entry.id ? nextRow : row
         )
     } catch (e) {
         entry.error = toUiError(e)
@@ -265,6 +274,46 @@ async function submitTimesheet() {
 function onDurationInput(entry: TimesheetEntryRow, event: Event) {
     const value = (event.target as HTMLInputElement).value
     entry.durationMinutes = value === "" ? null : Number(value)
+}
+
+function buildEntryPayload(entry: TimesheetEntryRow): TimesheetEntryPayload {
+    return {
+        projectId: entry.projectId,
+        taskId: entry.taskId ?? null,
+        workDate: entry.workDate,
+        startTime: entry.startTime || null,
+        endTime: entry.endTime || null,
+        durationMinutes: normalizeDurationMinutes(entry.durationMinutes),
+        notes: entry.notes || null,
+    }
+}
+
+function getEntrySignature(entry: TimesheetEntryRow) {
+    return JSON.stringify(buildEntryPayload(entry))
+}
+
+function hasUnsavedChanges(entry: TimesheetEntryRow) {
+    if (entry.isNew) return true
+    return getEntrySignature(entry) !== (entry.lastSavedSignature ?? null)
+}
+
+function rowSaveLabel(entry: TimesheetEntryRow) {
+    if (!isEditable.value) return "Locked"
+    if (entry.isSaving) return entry.isNew ? "Adding..." : "Saving..."
+    if (entry.isNew) return "Add row"
+    return hasUnsavedChanges(entry) ? "Save changes" : "Saved"
+}
+
+function rowDeleteLabel(entry: TimesheetEntryRow) {
+    if (entry.isDeleting) return "Removing..."
+    if (!isEditable.value) return "Locked"
+    return entry.isNew ? "Discard" : "Delete"
+}
+
+function rowSaveDisabled(entry: TimesheetEntryRow) {
+    if (!isEditable.value || entry.isSaving || entry.isDeleting) return true
+    if (entry.isNew) return false
+    return !hasUnsavedChanges(entry)
 }
 
 function normalizeDurationMinutes(value: TimesheetEntryRow["durationMinutes"]) {
@@ -347,7 +396,9 @@ onMounted(() => {
                 <div class="timesheets__week-actions">
                     <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(-1)">Previous</button>
                     <button type="button" class="btn btn-secondary btn-sm" :disabled="isCurrentWeek" @click="goToCurrentWeek">This week</button>
-                    <button type="button" class="btn btn-secondary btn-sm" :disabled="isAtMaxWeek" @click="moveWeek(1)">Next</button>
+                    <button type="button" class="btn btn-secondary btn-sm" :disabled="isAtMaxWeek" @click="moveWeek(1)">
+                        Next
+                    </button>
                 </div>
             </div>
         </header>
@@ -371,6 +422,9 @@ onMounted(() => {
                     {{ submitButtonLabel }}
                 </button>
             </div>
+            <div v-if="readOnlyBannerMessage" class="timesheets__readonly-banner" role="status">
+                {{ readOnlyBannerMessage }}
+            </div>
 
             <div v-if="!timesheet" class="timesheets__empty-week">
                 <p class="muted">No timesheet exists for this week yet. Create one to start entering hours.</p>
@@ -391,8 +445,13 @@ onMounted(() => {
                                 <span>Day total</span>
                                 <strong>{{ formatMinutes(dayTotalMinutes(day.date)) }}</strong>
                             </div>
-                            <button type="button" class="btn btn-primary btn-sm" :disabled="loading || !timesheet || !isEditable" @click="addEntryRow(day.date)">
-                                Add row
+                            <button
+                                type="button"
+                                class="btn btn-primary btn-sm"
+                                :disabled="loading || !timesheet || !isEditable"
+                                @click="addEntryRow(day.date)"
+                            >
+                                {{ isEditable ? "Add row" : "Rows locked" }}
                             </button>
                         </div>
                     </header>
@@ -425,11 +484,16 @@ onMounted(() => {
                                     <td><input v-model="entry.notes" type="text" placeholder="Optional notes" :disabled="!isEditable" /></td>
                                     <td>
                                         <div class="timesheets__row-actions">
-                                            <button type="button" class="btn btn-primary btn-sm" :disabled="!isEditable || entry.isSaving || entry.isDeleting" @click="saveEntry(entry)">
-                                                {{ entry.isSaving ? "Saving..." : entry.isNew ? "Add" : "Save" }}
+                                            <button
+                                                type="button"
+                                                class="btn btn-primary btn-sm"
+                                                :disabled="rowSaveDisabled(entry)"
+                                                @click="saveEntry(entry)"
+                                            >
+                                                {{ rowSaveLabel(entry) }}
                                             </button>
                                             <button type="button" class="btn btn-secondary btn-sm" :disabled="!isEditable || entry.isDeleting || entry.isSaving" @click="deleteEntry(entry)">
-                                                {{ entry.isDeleting ? "Removing..." : "Delete" }}
+                                                {{ rowDeleteLabel(entry) }}
                                             </button>
                                         </div>
                                         <div v-if="entry.error" class="alert alert--inline">{{ entry.error.message }}</div>
@@ -459,6 +523,7 @@ onMounted(() => {
 .timesheets__week-actions { display: flex; gap: var(--s-2); justify-content: flex-end; flex-wrap: wrap; }
 .timesheets__toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--s-3); }
 .timesheets__total { display: grid; gap: 2px; }
+.timesheets__readonly-banner { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); color: var(--text-2); margin-bottom: var(--s-3); padding: var(--s-3) var(--s-4); }
 .timesheets__empty-week { border: 1px dashed var(--border); border-radius: var(--r-md); padding: var(--s-4); display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--s-3); }
 .timesheets__days { display: grid; gap: var(--s-4); }
 .timesheets-day { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }

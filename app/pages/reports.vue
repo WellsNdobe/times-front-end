@@ -45,7 +45,7 @@ const memberNameByUserId = computed(() => {
     const map = new Map<string, string>()
     for (const member of members.value) {
         const fullName = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
-        map.set(member.userId, fullName || member.userId)
+        map.set(member.userId, fullName || "Unknown employee")
     }
     return map
 })

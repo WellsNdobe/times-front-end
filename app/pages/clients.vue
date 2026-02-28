@@ -163,7 +163,6 @@ async function onAddClient() {
             <ul v-else class="clients__grid">
                 <li v-for="client in filteredClients" :key="client.id" class="clients__item">
                     <p class="clients__name">{{ client.name }}</p>
-                    <p class="clients__id">{{ client.id }}</p>
                 </li>
             </ul>
         </template>
@@ -255,15 +254,8 @@ async function onAddClient() {
 }
 
 .clients__name {
-    margin: 0 0 var(--s-1) 0;
-    font-weight: 700;
-}
-
-.clients__id {
     margin: 0;
-    font-size: 0.75rem;
-    color: var(--text-3);
-    word-break: break-all;
+    font-weight: 700;
 }
 
 .clients__empty {
