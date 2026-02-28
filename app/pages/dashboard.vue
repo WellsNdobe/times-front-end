@@ -35,7 +35,6 @@ const weekLabel = computed(() => {
     return `${formatShortDate(start)} - ${formatShortDate(end)}`
 })
 const isCurrentWeek = computed(() => weekStartDate.value === currentWeekStart.value)
-const isAtLatestWeek = computed(() => weekStartDate.value >= currentWeekStart.value)
 
 const myMember = computed(() => {
     if (!user.value?.userId) return null
@@ -324,9 +323,6 @@ function toggleClientFilter(clientId: string) {
                         @click="goToThisWeek"
                     >
                         This week
-                    </button>
-                    <button type="button" class="btn btn-secondary btn-sm" :disabled="isAtLatestWeek" @click="shiftWeek(1)">
-                        Next week
                     </button>
                 </div>
             </div>

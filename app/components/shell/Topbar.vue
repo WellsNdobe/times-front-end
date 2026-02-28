@@ -65,7 +65,9 @@
           </ul>
 
           <div class="menu__footer">
-            <button class="link-btn" type="button">View all notifications</button>
+            <NuxtLink class="link-btn" to="/notifications" @click="isNotifOpen = false">
+              View all notifications
+            </NuxtLink>
           </div>
         </div>
       </div>
@@ -163,12 +165,7 @@ async function markAllRead() {
   if (!orgId) return
   try {
     await notificationsApi.markAllRead(orgId)
-    const now = new Date().toISOString()
-    notifications.value = notifications.value.map((n) => ({
-      ...n,
-      isRead: true,
-      readAtUtc: n.readAtUtc ?? now,
-    }))
+    notifications.value = []
   } catch (error) {
     console.error("Failed to mark notifications read:", error)
   }
@@ -212,7 +209,7 @@ async function loadNotifications() {
   if (!orgId) return
   try {
     await notificationsApi.createReminder(orgId)
-    notifications.value = await notificationsApi.list(orgId, { take: 25 })
+    notifications.value = await notificationsApi.list(orgId, { unreadOnly: true, take: 25 })
   } catch (error) {
     console.error("Failed to load notifications:", error)
   }
@@ -388,12 +385,15 @@ function formatRelativeTime(iso: string) {
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
-  width: 300px;
+  width: min(280px, calc(100vw - 24px));
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-md);
   z-index: 20;
+  display: flex;
+  flex-direction: column;
+  max-height: min(60vh, 420px);
 }
 
 .menu__header {
@@ -413,6 +413,7 @@ function formatRelativeTime(iso: string) {
   list-style: none;
   margin: 0;
   padding: 0;
+  overflow-y: auto;
 }
 
 .menu__item {

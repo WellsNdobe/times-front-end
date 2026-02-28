@@ -55,6 +55,13 @@ const timesheetStatusLabel = computed(() => {
     if (timesheet.value.status === 3) return "Rejected"
     return "Draft"
 })
+const timesheetStatusToneClass = computed(() => {
+    if (!timesheet.value?.id) return "timesheets__status-chip--neutral"
+    if (timesheet.value.status === 1) return "timesheets__status-chip--info"
+    if (timesheet.value.status === 2) return "timesheets__status-chip--success"
+    if (timesheet.value.status === 3) return "timesheets__status-chip--warning"
+    return "timesheets__status-chip--neutral"
+})
 
 const submitButtonLabel = computed(() => {
     if (submitting.value) return "Submitting..."
@@ -73,6 +80,7 @@ const canSubmit = computed(() => {
     if (!timesheet.value?.id || !isEditable.value || isFutureWeek.value) return false
     return entries.value.length > 0
 })
+const isSubmitButtonUsable = computed(() => !loading.value && !submitting.value && canSubmit.value)
 
 const showRejectionBanner = computed(() => timesheet.value?.status === 3)
 const rejectionReason = computed(() => {
@@ -392,7 +400,9 @@ onMounted(() => {
             <div class="timesheets__week">
                 <span class="timesheets__week-label">Week</span>
                 <span class="timesheets__week-date">{{ weekLabel }}</span>
-                <span class="timesheets__week-status">{{ timesheetStatusLabel }}</span>
+                <span class="timesheets__week-status timesheets__status-chip" :class="timesheetStatusToneClass">
+                    {{ timesheetStatusLabel }}
+                </span>
                 <div class="timesheets__week-actions">
                     <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(-1)">Previous</button>
                     <button type="button" class="btn btn-secondary btn-sm" :disabled="isCurrentWeek" @click="goToCurrentWeek">This week</button>
@@ -418,7 +428,13 @@ onMounted(() => {
                     <span>Week total</span>
                     <strong>{{ formatMinutes(weekTotalMinutes) }}</strong>
                 </div>
-                <button type="button" class="btn btn-secondary" :disabled="loading || submitting || !canSubmit" @click="submitTimesheet">
+                <button
+                    type="button"
+                    class="btn"
+                    :class="isSubmitButtonUsable ? 'timesheets__submit-btn--active' : 'timesheets__submit-btn--inactive'"
+                    :disabled="loading || submitting || !canSubmit"
+                    @click="submitTimesheet"
+                >
                     {{ submitButtonLabel }}
                 </button>
             </div>
@@ -520,9 +536,18 @@ onMounted(() => {
 .timesheets__subtitle { margin: 0; color: var(--text-2); }
 .timesheets__week { text-align: right; display: grid; gap: 4px; }
 .timesheets__week-label { font-size: 0.75rem; text-transform: uppercase; color: var(--text-3); }
+.timesheets__status-chip { display: inline-flex; justify-self: flex-end; align-items: center; width: fit-content; border-radius: var(--r-pill); border: 1px solid transparent; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.03em; padding: 4px 10px; }
+.timesheets__status-chip--neutral { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
+.timesheets__status-chip--info { background: var(--info-soft); color: var(--info); border-color: #c7dafd; }
+.timesheets__status-chip--success { background: var(--success-soft); color: var(--success); border-color: #ccefd8; }
+.timesheets__status-chip--warning { background: var(--warning-soft); color: var(--warning); border-color: #ffe2c1; }
 .timesheets__week-actions { display: flex; gap: var(--s-2); justify-content: flex-end; flex-wrap: wrap; }
 .timesheets__toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--s-3); }
 .timesheets__total { display: grid; gap: 2px; }
+.timesheets__submit-btn--active { background: var(--success); border-color: var(--success); color: #fff; }
+.timesheets__submit-btn--active:hover { background: #15803d; border-color: #15803d; }
+.timesheets__submit-btn--inactive { background: #e5e7eb; border-color: #d1d5db; color: #6b7280; cursor: not-allowed; }
+.timesheets__submit-btn--inactive:hover { background: #e5e7eb; }
 .timesheets__readonly-banner { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); color: var(--text-2); margin-bottom: var(--s-3); padding: var(--s-3) var(--s-4); }
 .timesheets__empty-week { border: 1px dashed var(--border); border-radius: var(--r-md); padding: var(--s-4); display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--s-3); }
 .timesheets__days { display: grid; gap: var(--s-4); }
@@ -545,6 +570,7 @@ onMounted(() => {
 
 @media (max-width: 900px) {
     .timesheets__week { text-align: left; }
+    .timesheets__status-chip { justify-self: flex-start; }
     .timesheets__week-actions { justify-content: flex-start; }
     .timesheets__toolbar { flex-direction: column; align-items: flex-start; }
 }
