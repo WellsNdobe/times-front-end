@@ -7,6 +7,11 @@ import { organizationsApi, type Organization, type OrganizationMember } from "~/
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { clientsApi, type Client } from "~/api/clientsApi"
 import {
+  organizationSettingsApi,
+  type OrganizationSettings,
+  type UpdateOrganizationSettingsRequest,
+} from "~/api/organizationSettingsApi"
+import {
   userPreferencesApi,
   type ReminderDay,
   type UpdateUserPreferencesRequest,
@@ -33,6 +38,7 @@ const passwordLoading = ref(false)
 const signOutAllLoading = ref(false)
 const personalSaveLoading = ref(false)
 const workflowSaveLoading = ref(false)
+const organizationSaveLoading = ref(false)
 const showPasswordForm = ref(false)
 const openSections = ref({
   defaults: true,
@@ -152,6 +158,10 @@ async function loadProfile() {
     myMember.value = userId ? membersResult.find((m) => m.userId === userId) ?? null : null
 
     applyUserPreferences(preferencesResult)
+    if (myMember.value?.role === 0) {
+      const organizationSettingsResult = await organizationSettingsApi.get(firstOrg.id)
+      applyOrganizationSettings(organizationSettingsResult)
+    }
   } catch (e) {
     console.error("Load profile error:", e)
     error.value = toUiError(e)
@@ -187,6 +197,13 @@ function applyUserPreferences(preferences: UserPreferences) {
     autoReminders: preferences.autoReminders,
     reminderDay: preferences.reminderDay,
     reminderTime: preferences.reminderTime,
+  }
+}
+
+function applyOrganizationSettings(settings: OrganizationSettings) {
+  orgPrefs.value = {
+    weekStartDay: settings.weekStartDay,
+    weeklyHoursTarget: settings.weeklyHoursTarget,
   }
 }
 
@@ -237,12 +254,27 @@ async function saveWorkflowPreferences() {
   }
 }
 
-function saveOrganizationPreferences() {
-  if (!isAdmin.value) return
+function buildOrganizationSettingsPayload(): UpdateOrganizationSettingsRequest {
+  return {
+    weekStartDay: orgPrefs.value.weekStartDay,
+    weeklyHoursTarget: orgPrefs.value.weeklyHoursTarget,
+  }
+}
+
+async function saveOrganizationPreferences() {
+  if (!isAdmin.value || !org.value) return
   saveMessage.value = ""
-  if (typeof localStorage === "undefined") return
-  localStorage.setItem(`timesheet.profile.org.${org.value?.id ?? "no-org"}`, JSON.stringify(orgPrefs.value))
-  saveMessage.value = "Organization preferences saved locally."
+  saveError.value = ""
+  organizationSaveLoading.value = true
+  try {
+    const updated = await organizationSettingsApi.update(org.value.id, buildOrganizationSettingsPayload())
+    applyOrganizationSettings(updated)
+    saveMessage.value = "Organization preferences saved."
+  } catch (e) {
+    saveError.value = toUiError(e).message
+  } finally {
+    organizationSaveLoading.value = false
+  }
 }
 
 async function onChangePassword() {
@@ -548,10 +580,15 @@ function toggleSection(section: keyof typeof openSections.value) {
               <span class="profile__label">Target weekly hours (organization)</span>
               <input v-model.number="orgPrefs.weeklyHoursTarget" type="number" min="1" max="168" />
             </label>
-            <button type="button" class="btn btn-primary" @click="saveOrganizationPreferences">
-              Save organization preferences
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="organizationSaveLoading"
+              @click="saveOrganizationPreferences"
+            >
+              {{ organizationSaveLoading ? "Saving..." : "Save organization preferences" }}
             </button>
-            <p class="profile__hint">Admin-only settings. Stored locally until backend support is added.</p>
+            <p class="profile__hint">Admin-only settings applied across the organization.</p>
           </div>
         </article>
       </section>

@@ -5,6 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRoute } from "vue-router"
 import { organizationsApi, type Organization } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
+import { trackerApi, type ActiveTimerSession } from "~/api/trackerApi"
 import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
 import { timesheetEntriesApi, type TimesheetEntry } from "~/api/timesheetEntriesApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
@@ -28,8 +29,10 @@ const manualMinutes = ref<number | null>(null)
 
 const running = ref(false)
 const sessionStartedAt = ref<Date | null>(null)
+const activeSessionId = ref<string | null>(null)
 const now = ref(Date.now())
 let ticker: ReturnType<typeof setInterval> | null = null
+let notesSyncTimer: ReturnType<typeof setTimeout> | null = null
 
 const organizationId = computed(() => org.value?.id ?? "")
 const activeProjects = computed(() =>
@@ -66,7 +69,10 @@ const isTimesheetEditable = computed(() => {
 })
 
 onMounted(() => loadTrackerData())
-onBeforeUnmount(stopTicker)
+onBeforeUnmount(() => {
+    stopTicker()
+    clearNotesSyncTimer()
+})
 
 watch(workDate, async (value, previous) => {
     if (!value || value === previous) return
@@ -81,6 +87,11 @@ watch(
     }
 )
 
+watch(notes, () => {
+    if (!running.value || !organizationId.value || !activeSessionId.value) return
+    queueSessionNotesSync()
+})
+
 async function loadTrackerData() {
     loading.value = true
     error.value = null
@@ -94,6 +105,11 @@ async function loadTrackerData() {
         if (!firstOrg) return
         org.value = firstOrg
         if (!org.value?.id) return
+
+        const activeSession = await getActiveSession(firstOrg.id)
+        if (activeSession) {
+            applyActiveSession(activeSession)
+        }
 
         const [projectsResult, timesheetResult] = await Promise.all([
             projectsApi.list(org.value.id, { isActive: true }),
@@ -118,6 +134,7 @@ async function loadTrackerData() {
 }
 
 function applyQueryPrefill() {
+    if (running.value) return
     const rawDate = route.query.date
     const queryDate = typeof rawDate === "string" ? rawDate : ""
     if (/^\d{4}-\d{2}-\d{2}$/.test(queryDate)) {
@@ -163,6 +180,10 @@ async function ensureTimesheetForSelectedWeek() {
 }
 
 function startTimer() {
+    void startTimerSession()
+}
+
+async function startTimerSession() {
     localError.value = null
     if (!isTimesheetEditable.value) {
         localError.value = {
@@ -179,33 +200,36 @@ function startTimer() {
         return
     }
     if (running.value) return
-    running.value = true
-    sessionStartedAt.value = new Date()
-    startTicker()
-}
-
-async function stopAndSave() {
-    if (!running.value || !sessionStartedAt.value) return
-    if (!organizationId.value || !timesheet.value?.id || !selectedProjectId.value) return
-    localError.value = null
-
-    const started = sessionStartedAt.value
-    const ended = new Date()
-    const durationMinutes = Math.max(
-        1,
-        Math.round((ended.getTime() - started.getTime()) / 60000)
-    )
+    if (!organizationId.value || !timesheet.value?.id) return
 
     saving.value = true
     try {
-        await timesheetEntriesApi.create(organizationId.value, timesheet.value.id, {
+        const session = await trackerApi.start(organizationId.value, {
+            timesheetId: timesheet.value.id,
             projectId: selectedProjectId.value,
             workDate: workDate.value,
-            startTime: toTimeString(started),
-            endTime: toTimeString(ended),
-            durationMinutes,
+            notes: notes.value.trim() || null,
+            utcOffsetMinutes: -new Date().getTimezoneOffset(),
+        })
+        applyActiveSession(session)
+    } catch (e) {
+        localError.value = toUiError(e)
+    } finally {
+        saving.value = false
+    }
+}
+
+async function stopAndSave() {
+    if (!running.value || !organizationId.value) return
+    localError.value = null
+
+    saving.value = true
+    try {
+        const createdEntry = await trackerApi.stop(organizationId.value, {
             notes: notes.value.trim() || null,
         })
+        mergeCreatedEntry(createdEntry)
+        clearActiveSession()
         await refreshEntries()
         notes.value = ""
         manualMinutes.value = null
@@ -213,10 +237,7 @@ async function stopAndSave() {
         console.error("Stop and save error:", e)
         localError.value = toUiError(e)
     } finally {
-        running.value = false
-        sessionStartedAt.value = null
         saving.value = false
-        stopTicker()
     }
 }
 
@@ -285,6 +306,20 @@ function projectNameById(projectId: string) {
     return projects.value.find((project) => project.id === projectId)?.name ?? "Unknown project"
 }
 
+function mergeCreatedEntry(entry: TimesheetEntry) {
+    if (timesheet.value?.id !== entry.timesheetId) return
+
+    const next = entries.value
+        .filter((existing) => existing.id !== entry.id)
+        .concat(entry)
+        .sort((a, b) => {
+            if (a.workDate !== b.workDate) return a.workDate.localeCompare(b.workDate)
+            return (a.startTime ?? "").localeCompare(b.startTime ?? "")
+        })
+
+    entries.value = next
+}
+
 function startTicker() {
     stopTicker()
     ticker = setInterval(() => {
@@ -296,6 +331,59 @@ function stopTicker() {
     if (!ticker) return
     clearInterval(ticker)
     ticker = null
+}
+
+async function getActiveSession(orgId: string) {
+    try {
+        return await trackerApi.get(orgId)
+    } catch (e: any) {
+        if (e?.status === 404 || e?.response?.status === 404) return null
+        throw e
+    }
+}
+
+function applyActiveSession(session: ActiveTimerSession) {
+    activeSessionId.value = session.id
+    selectedProjectId.value = session.projectId
+    workDate.value = session.workDate
+    notes.value = session.notes ?? ""
+    running.value = true
+    sessionStartedAt.value = parseUtcDateTime(session.startedAtUtc)
+    now.value = Date.now()
+    startTicker()
+}
+
+function clearActiveSession() {
+    activeSessionId.value = null
+    running.value = false
+    sessionStartedAt.value = null
+    stopTicker()
+    clearNotesSyncTimer()
+}
+
+function queueSessionNotesSync() {
+    clearNotesSyncTimer()
+    notesSyncTimer = setTimeout(() => {
+        void syncSessionNotes()
+    }, 400)
+}
+
+function clearNotesSyncTimer() {
+    if (!notesSyncTimer) return
+    clearTimeout(notesSyncTimer)
+    notesSyncTimer = null
+}
+
+async function syncSessionNotes() {
+    clearNotesSyncTimer()
+    if (!running.value || !organizationId.value || !activeSessionId.value) return
+    try {
+        await trackerApi.update(organizationId.value, {
+            notes: notes.value.trim() || null,
+        })
+    } catch (e) {
+        console.error("Sync timer notes error:", e)
+    }
 }
 
 function getWeekStartDateString(dateInput: string) {
@@ -312,12 +400,6 @@ function formatDateForInput(date: Date) {
     const month = String(date.getMonth() + 1).padStart(2, "0")
     const day = String(date.getDate()).padStart(2, "0")
     return `${year}-${month}-${day}`
-}
-
-function toTimeString(date: Date) {
-    const hours = String(date.getHours()).padStart(2, "0")
-    const minutes = String(date.getMinutes()).padStart(2, "0")
-    return `${hours}:${minutes}`
 }
 
 function formatSecondsAsClock(totalSeconds: number) {
@@ -344,6 +426,11 @@ function formatDateLong(value: string) {
         day: "numeric",
         year: "numeric",
     })
+}
+
+function parseUtcDateTime(value: string) {
+    const normalized = /z$|[+-]\d{2}:\d{2}$/i.test(value) ? value : `${value}Z`
+    return new Date(normalized)
 }
 </script>
 
