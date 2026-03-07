@@ -6,17 +6,14 @@ import { useAuth } from "~/composables/useAuth"
 import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { clientsApi, type Client } from "~/api/clientsApi"
+import {
+  userPreferencesApi,
+  type ReminderDay,
+  type UpdateUserPreferencesRequest,
+  type UserPreferences,
+  type WeekStartDay,
+} from "~/api/userPreferencesApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
-
-type WeekStartDay = "monday" | "sunday"
-type ReminderDay =
-  | "monday"
-  | "tuesday"
-  | "wednesday"
-  | "thursday"
-  | "friday"
-  | "saturday"
-  | "sunday"
 
 const { user, logout } = useAuth()
 
@@ -29,10 +26,13 @@ const loading = ref(true)
 const error = ref<UiError | null>(null)
 
 const saveMessage = ref("")
+const saveError = ref("")
 const securityMessage = ref("")
 const securityError = ref("")
 const passwordLoading = ref(false)
 const signOutAllLoading = ref(false)
+const personalSaveLoading = ref(false)
+const workflowSaveLoading = ref(false)
 const showPasswordForm = ref(false)
 const openSections = ref({
   defaults: true,
@@ -137,10 +137,11 @@ async function loadProfile() {
     if (!firstOrg) return
     org.value = firstOrg
 
-    const [membersResult, projectsResult, clientsResult] = await Promise.all([
+    const [membersResult, projectsResult, clientsResult, preferencesResult] = await Promise.all([
       organizationsApi.getMembers(firstOrg.id),
       projectsApi.list(firstOrg.id),
       clientsApi.list(firstOrg.id),
+      userPreferencesApi.getMe(firstOrg.id),
     ])
 
     members.value = membersResult
@@ -150,7 +151,7 @@ async function loadProfile() {
     const userId = user.value?.userId
     myMember.value = userId ? membersResult.find((m) => m.userId === userId) ?? null : null
 
-    hydrateSettingsFromStorage()
+    applyUserPreferences(preferencesResult)
   } catch (e) {
     console.error("Load profile error:", e)
     error.value = toUiError(e)
@@ -171,53 +172,76 @@ function memberDisplayName(member: OrganizationMember) {
   return name || "Unknown user"
 }
 
-function storageKey(kind: "personal" | "workflow" | "org") {
-  const orgId = org.value?.id ?? "no-org"
-  const userId = user.value?.userId ?? "no-user"
-  return `timesheet.profile.${kind}.${orgId}.${userId}`
-}
+function applyUserPreferences(preferences: UserPreferences) {
+  personalPrefs.value = {
+    weeklyHoursTarget: preferences.weeklyHoursTarget,
+    weekStartDay: preferences.weekStartDay,
+    defaultProjectId: preferences.defaultProjectId ?? "",
+    defaultClientId: preferences.defaultClientId ?? "",
+    timeZone: preferences.timeZone,
+  }
 
-function hydrateSettingsFromStorage() {
-  if (typeof localStorage === "undefined") return
-  try {
-    const savedPersonal = localStorage.getItem(storageKey("personal"))
-    if (savedPersonal) {
-      personalPrefs.value = { ...personalPrefs.value, ...JSON.parse(savedPersonal) }
-    }
-
-    const savedWorkflow = localStorage.getItem(storageKey("workflow"))
-    if (savedWorkflow) {
-      workflowPrefs.value = { ...workflowPrefs.value, ...JSON.parse(savedWorkflow) }
-    }
-
-    const savedOrg = localStorage.getItem(storageKey("org"))
-    if (savedOrg) {
-      orgPrefs.value = { ...orgPrefs.value, ...JSON.parse(savedOrg) }
-    }
-  } catch (e) {
-    console.error("Could not read saved profile settings:", e)
+  workflowPrefs.value = {
+    managerId: preferences.managerMemberId ?? "",
+    backupApproverId: preferences.backupApproverMemberId ?? "",
+    autoReminders: preferences.autoReminders,
+    reminderDay: preferences.reminderDay,
+    reminderTime: preferences.reminderTime,
   }
 }
 
-function savePersonalPreferences() {
-  saveMessage.value = ""
-  if (typeof localStorage === "undefined") return
-  localStorage.setItem(storageKey("personal"), JSON.stringify(personalPrefs.value))
-  saveMessage.value = "Personal preferences saved locally."
+function buildPreferencesPayload(): UpdateUserPreferencesRequest {
+  return {
+    weeklyHoursTarget: personalPrefs.value.weeklyHoursTarget,
+    weekStartDay: personalPrefs.value.weekStartDay,
+    defaultClientId: personalPrefs.value.defaultClientId || null,
+    defaultProjectId: personalPrefs.value.defaultProjectId || null,
+    timeZone: personalPrefs.value.timeZone,
+    managerMemberId: workflowPrefs.value.managerId || null,
+    backupApproverMemberId: workflowPrefs.value.backupApproverId || null,
+    autoReminders: workflowPrefs.value.autoReminders,
+    reminderDay: workflowPrefs.value.reminderDay,
+    reminderTime: workflowPrefs.value.reminderTime,
+  }
 }
 
-function saveWorkflowPreferences() {
+async function savePersonalPreferences() {
+  if (!org.value) return
   saveMessage.value = ""
-  if (typeof localStorage === "undefined") return
-  localStorage.setItem(storageKey("workflow"), JSON.stringify(workflowPrefs.value))
-  saveMessage.value = "Workflow preferences saved locally."
+  saveError.value = ""
+  personalSaveLoading.value = true
+  try {
+    const updated = await userPreferencesApi.updateMe(org.value.id, buildPreferencesPayload())
+    applyUserPreferences(updated)
+    saveMessage.value = "Default settings saved."
+  } catch (e) {
+    saveError.value = toUiError(e).message
+  } finally {
+    personalSaveLoading.value = false
+  }
+}
+
+async function saveWorkflowPreferences() {
+  if (!org.value) return
+  saveMessage.value = ""
+  saveError.value = ""
+  workflowSaveLoading.value = true
+  try {
+    const updated = await userPreferencesApi.updateMe(org.value.id, buildPreferencesPayload())
+    applyUserPreferences(updated)
+    saveMessage.value = "Workflow preferences saved."
+  } catch (e) {
+    saveError.value = toUiError(e).message
+  } finally {
+    workflowSaveLoading.value = false
+  }
 }
 
 function saveOrganizationPreferences() {
   if (!isAdmin.value) return
   saveMessage.value = ""
   if (typeof localStorage === "undefined") return
-  localStorage.setItem(storageKey("org"), JSON.stringify(orgPrefs.value))
+  localStorage.setItem(`timesheet.profile.org.${org.value?.id ?? "no-org"}`, JSON.stringify(orgPrefs.value))
   saveMessage.value = "Organization preferences saved locally."
 }
 
@@ -385,8 +409,13 @@ function toggleSection(section: keyof typeof openSections.value) {
                 <option v-for="zone in timeZones" :key="zone" :value="zone">{{ zone }}</option>
               </select>
             </label>
-            <button type="button" class="btn btn-primary" @click="savePersonalPreferences">
-              Save defaults
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="personalSaveLoading"
+              @click="savePersonalPreferences"
+            >
+              {{ personalSaveLoading ? "Saving..." : "Save defaults" }}
             </button>
           </div>
         </article>
@@ -431,8 +460,13 @@ function toggleSection(section: keyof typeof openSections.value) {
               <span class="profile__label">Reminder time</span>
               <input v-model="workflowPrefs.reminderTime" type="time" :disabled="!workflowPrefs.autoReminders" />
             </label>
-            <button type="button" class="btn btn-primary" @click="saveWorkflowPreferences">
-              Save workflow
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="workflowSaveLoading"
+              @click="saveWorkflowPreferences"
+            >
+              {{ workflowSaveLoading ? "Saving..." : "Save workflow" }}
             </button>
           </div>
         </article>
@@ -523,6 +557,7 @@ function toggleSection(section: keyof typeof openSections.value) {
       </section>
 
       <p v-if="saveMessage" class="profile__saved">{{ saveMessage }}</p>
+      <p v-if="saveError" class="profile__error">{{ saveError }}</p>
     </template>
   </section>
 </template>

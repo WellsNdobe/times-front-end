@@ -12,6 +12,7 @@ import {
     type UpdateProjectRequest,
     type ProjectAssignment,
 } from "~/api/projectsApi"
+import { reportsApi, type ProjectDailyHoursReportRow } from "~/api/reportsApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
 const { user } = useAuth()
@@ -84,6 +85,7 @@ async function loadProjects() {
             projects.value = projectsResult
             clients.value = clientsResult
             members.value = membersResult
+            await loadProjectHoursReport(org.value.id)
         }
     } catch (e) {
         console.error("Load projects error:", e)
@@ -183,6 +185,46 @@ const assignLoading = ref(false)
 const assignError = ref<UiError | null>(null)
 const unassignLoadingUserId = ref<string | null>(null)
 
+const projectDailyHoursRows = ref<ProjectDailyHoursReportRow[]>([])
+const projectHoursReportLoading = ref(false)
+const projectHoursReportError = ref<UiError | null>(null)
+
+const projectHoursByProject = computed(() => {
+    const totals = new Map<string, { label: string; totalMinutes: number }>()
+
+    for (const row of projectDailyHoursRows.value) {
+        const existing = totals.get(row.projectId)
+        if (!existing) {
+            totals.set(row.projectId, {
+                label: row.projectName || "Unknown project",
+                totalMinutes: row.totalMinutes ?? 0,
+            })
+            continue
+        }
+        existing.totalMinutes += row.totalMinutes ?? 0
+    }
+
+    const items = [...totals.entries()]
+        .map(([projectId, value]) => ({
+            projectId,
+            label: value.label,
+            totalMinutes: value.totalMinutes,
+        }))
+        .sort((a, b) => b.totalMinutes - a.totalMinutes)
+
+    const maxMinutes = Math.max(...items.map((i) => i.totalMinutes), 0)
+
+    return items.slice(0, 8).map((item) => ({
+        ...item,
+        totalHours: item.totalMinutes / 60,
+        percent: maxMinutes > 0 ? Math.max(6, Math.round((item.totalMinutes / maxMinutes) * 100)) : 0,
+    }))
+})
+
+const projectHoursTotalHours = computed(() =>
+    projectDailyHoursRows.value.reduce((sum, row) => sum + (row.totalMinutes ?? 0), 0) / 60
+)
+
 function memberDisplayNameByUserId(userId?: string) {
     if (!userId) return "Unknown member"
     const member = memberMap.value.get(userId)
@@ -260,6 +302,34 @@ async function onUnassignUser(userId: string) {
     } finally {
         unassignLoadingUserId.value = null
     }
+}
+
+async function loadProjectHoursReport(orgId: string) {
+    projectHoursReportLoading.value = true
+    projectHoursReportError.value = null
+
+    const toDate = new Date()
+    const fromDate = new Date(toDate)
+    fromDate.setDate(fromDate.getDate() - 29)
+
+    try {
+        projectDailyHoursRows.value = await reportsApi.getProjectDailyHours(orgId, {
+            fromDate: formatDateForApi(fromDate),
+            toDate: formatDateForApi(toDate),
+        })
+    } catch (e) {
+        projectDailyHoursRows.value = []
+        projectHoursReportError.value = toUiError(e)
+    } finally {
+        projectHoursReportLoading.value = false
+    }
+}
+
+function formatDateForApi(date: Date) {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, "0")
+    const day = String(date.getDate()).padStart(2, "0")
+    return `${year}-${month}-${day}`
 }
 </script>
 
@@ -507,6 +577,33 @@ async function onUnassignUser(userId: string) {
                 </table>
                 <p v-else class="muted">No projects yet. Create one above.</p>
             </div>
+
+            <section class="projects-report">
+                <div class="projects-report__head">
+                    <h2 class="projects-report__title">Project Hours (Last 30 Days)</h2>
+                    <span class="projects-report__meta">{{ projectHoursTotalHours.toFixed(1) }} total hours</span>
+                </div>
+
+                <p v-if="projectHoursReportLoading" class="muted">Loading report...</p>
+
+                <div v-else-if="projectHoursReportError" class="alert alert--inline" role="alert">
+                    {{ projectHoursReportError.message }}
+                </div>
+
+                <div v-else-if="projectHoursByProject.length" class="report-bars">
+                    <div v-for="item in projectHoursByProject" :key="item.projectId" class="report-bars__row">
+                        <div class="report-bars__labels">
+                            <span class="report-bars__name">{{ item.label }}</span>
+                            <span class="report-bars__value">{{ item.totalHours.toFixed(1) }}h</span>
+                        </div>
+                        <div class="report-bars__track">
+                            <div class="report-bars__fill" :style="{ width: `${item.percent}%` }"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <p v-else class="muted">No report data for the last 30 days.</p>
+            </section>
         </template>
     </section>
 </template>
@@ -600,6 +697,68 @@ async function onUnassignUser(userId: string) {
 
 .projects__list-wrap {
     overflow-x: auto;
+}
+
+.projects-report {
+    margin-top: var(--s-5);
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--border);
+}
+
+.projects-report__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--s-3);
+    margin-bottom: var(--s-3);
+}
+
+.projects-report__title {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.projects-report__meta {
+    color: var(--text-2);
+    font-size: 0.875rem;
+}
+
+.report-bars {
+    display: grid;
+    gap: var(--s-3);
+}
+
+.report-bars__row {
+    display: grid;
+    gap: var(--s-1);
+}
+
+.report-bars__labels {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s-3);
+    font-size: 0.875rem;
+}
+
+.report-bars__name {
+    font-weight: 600;
+}
+
+.report-bars__value {
+    color: var(--text-2);
+}
+
+.report-bars__track {
+    height: 10px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    overflow: hidden;
+}
+
+.report-bars__fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #0f766e, #14b8a6);
 }
 
 .projects-table {
