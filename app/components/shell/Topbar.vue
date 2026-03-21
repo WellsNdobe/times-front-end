@@ -64,11 +64,6 @@
             </li>
           </ul>
 
-          <div class="menu__footer">
-            <NuxtLink class="link-btn" to="/notifications" @click="isNotifOpen = false">
-              View all notifications
-            </NuxtLink>
-          </div>
         </div>
       </div>
 
@@ -480,12 +475,6 @@ function formatRelativeTime(iso: string) {
 .menu__item-meta {
   font-size: 13px;
   color: var(--text-3);
-}
-
-.menu__footer {
-  padding: var(--s-2) var(--s-3);
-  border-top: 1px solid var(--border);
-  text-align: center;
 }
 
 .pill {

@@ -11,8 +11,8 @@ import {
     type CreateProjectRequest,
     type UpdateProjectRequest,
     type ProjectAssignment,
+    type ProjectApprover,
 } from "~/api/projectsApi"
-import { reportsApi, type ProjectDailyHoursReportRow } from "~/api/reportsApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
 const { user } = useAuth()
@@ -44,16 +44,17 @@ const organizationId = computed(() => org.value?.id ?? "")
 
 const memberMap = computed(() => {
     const map = new Map<string, OrganizationMember>()
-    for (const m of members.value) map.set(m.userId, m)
+    for (const member of members.value) map.set(member.userId, member)
     return map
 })
 
 const myMember = computed(() => {
     const userId = user.value?.userId
     if (!userId) return null
-    return members.value.find((m) => m.userId === userId) ?? null
+    return members.value.find((member) => member.userId === userId) ?? null
 })
 
+const isAdmin = computed(() => myMember.value?.role === 0)
 const isManagerOrAdmin = computed(() => {
     const role = myMember.value?.role
     return role === 0 || role === 1
@@ -73,20 +74,22 @@ async function loadProjects() {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
+
         const firstOrg = orgs[0]
         if (!firstOrg) return
+
         org.value = firstOrg
-        if (org.value?.id) {
-            const [projectsResult, clientsResult, membersResult] = await Promise.all([
-                projectsApi.list(org.value.id, listParams.value),
-                clientsApi.list(org.value.id),
-                organizationsApi.getMembers(org.value.id),
-            ])
-            projects.value = projectsResult
-            clients.value = clientsResult
-            members.value = membersResult
-            await loadProjectHoursReport(org.value.id)
-        }
+        if (!org.value.id) return
+
+        const [projectsResult, clientsResult, membersResult] = await Promise.all([
+            projectsApi.list(org.value.id, listParams.value),
+            clientsApi.list(org.value.id),
+            organizationsApi.getMembers(org.value.id),
+        ])
+
+        projects.value = projectsResult
+        clients.value = clientsResult
+        members.value = membersResult
     } catch (e) {
         console.error("Load projects error:", e)
         error.value = toUiError(e)
@@ -100,6 +103,7 @@ onMounted(() => loadProjects())
 async function onFilterChange() {
     if (!organizationId.value) return
     openAssignmentsProjectId.value = null
+    openApproversProjectId.value = null
     loading.value = true
     error.value = null
     try {
@@ -171,8 +175,30 @@ async function onUpdateProject() {
 function clientName(project: Project) {
     if (project.clientName) return project.clientName
     if (!project.clientId) return "Unassigned"
-    const client = clients.value.find((c) => c.id === project.clientId)
+    const client = clients.value.find((item) => item.id === project.clientId)
     return client?.name ?? "Unassigned"
+}
+
+function memberDisplayNameByUserId(userId?: string) {
+    if (!userId) return "Unknown member"
+    const member = memberMap.value.get(userId)
+    if (!member) return "Unknown member"
+    const name = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
+    return name || "Unknown member"
+}
+
+function setProjectApproverIds(projectId: string, userIds: string[]) {
+    projects.value = projects.value.map((project) =>
+        project.id === projectId
+            ? { ...project, approverUserIds: [...userIds].sort((a, b) => a.localeCompare(b)) }
+            : project
+    )
+}
+
+function projectApproverNames(project: Project) {
+    const userIds = project.approverUserIds ?? []
+    if (!userIds.length) return "No approvers set"
+    return userIds.map((userId) => memberDisplayNameByUserId(userId)).join(", ")
 }
 
 const openAssignmentsProjectId = ref<string | null>(null)
@@ -185,59 +211,31 @@ const assignLoading = ref(false)
 const assignError = ref<UiError | null>(null)
 const unassignLoadingUserId = ref<string | null>(null)
 
-const projectDailyHoursRows = ref<ProjectDailyHoursReportRow[]>([])
-const projectHoursReportLoading = ref(false)
-const projectHoursReportError = ref<UiError | null>(null)
+const openApproversProjectId = ref<string | null>(null)
+const approvers = ref<ProjectApprover[]>([])
+const approversLoading = ref(false)
+const approversError = ref<UiError | null>(null)
 
-const projectHoursByProject = computed(() => {
-    const totals = new Map<string, { label: string; totalMinutes: number }>()
+const assignApproverUserId = ref("")
+const assignApproverLoading = ref(false)
+const assignApproverError = ref<UiError | null>(null)
+const unassignApproverLoadingUserId = ref<string | null>(null)
 
-    for (const row of projectDailyHoursRows.value) {
-        const existing = totals.get(row.projectId)
-        if (!existing) {
-            totals.set(row.projectId, {
-                label: row.projectName || "Unknown project",
-                totalMinutes: row.totalMinutes ?? 0,
-            })
-            continue
-        }
-        existing.totalMinutes += row.totalMinutes ?? 0
-    }
-
-    const items = [...totals.entries()]
-        .map(([projectId, value]) => ({
-            projectId,
-            label: value.label,
-            totalMinutes: value.totalMinutes,
-        }))
-        .sort((a, b) => b.totalMinutes - a.totalMinutes)
-
-    const maxMinutes = Math.max(...items.map((i) => i.totalMinutes), 0)
-
-    return items.slice(0, 8).map((item) => ({
-        ...item,
-        totalHours: item.totalMinutes / 60,
-        percent: maxMinutes > 0 ? Math.max(6, Math.round((item.totalMinutes / maxMinutes) * 100)) : 0,
-    }))
-})
-
-const projectHoursTotalHours = computed(() =>
-    projectDailyHoursRows.value.reduce((sum, row) => sum + (row.totalMinutes ?? 0), 0) / 60
-)
-
-function memberDisplayNameByUserId(userId?: string) {
-    if (!userId) return "Unknown member"
-    const member = memberMap.value.get(userId)
-    if (!member) return "Unknown member"
-    const name = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
-    return name || "Unknown member"
-}
-
-const assignedUserIds = computed(() => new Set(assignments.value.map((a) => a.userId)))
+const assignedUserIds = computed(() => new Set(assignments.value.map((assignment) => assignment.userId)))
 const assignCandidates = computed(() =>
     members.value
-        .filter((m) => m.isActive)
-        .filter((m) => !assignedUserIds.value.has(m.userId))
+        .filter((member) => member.isActive)
+        .filter((member) => !assignedUserIds.value.has(member.userId))
+        .sort((a, b) =>
+            memberDisplayNameByUserId(a.userId).localeCompare(memberDisplayNameByUserId(b.userId))
+        )
+)
+
+const assignedApproverUserIds = computed(() => new Set(approvers.value.map((approver) => approver.userId)))
+const approverCandidates = computed(() =>
+    members.value
+        .filter((member) => member.isActive)
+        .filter((member) => !assignedApproverUserIds.value.has(member.userId))
         .sort((a, b) =>
             memberDisplayNameByUserId(a.userId).localeCompare(memberDisplayNameByUserId(b.userId))
         )
@@ -264,6 +262,7 @@ async function toggleAssignments(projectId: string) {
         openAssignmentsProjectId.value = null
         return
     }
+    openApproversProjectId.value = null
     openAssignmentsProjectId.value = projectId
     assignUserId.value = ""
     await loadAssignments(projectId)
@@ -295,7 +294,7 @@ async function onUnassignUser(userId: string) {
     unassignLoadingUserId.value = userId
     try {
         await projectsApi.unassignUser(organizationId.value, openAssignmentsProjectId.value, userId)
-        assignments.value = assignments.value.filter((a) => a.userId !== userId)
+        assignments.value = assignments.value.filter((assignment) => assignment.userId !== userId)
     } catch (e) {
         console.error("Unassign user error:", e)
         assignmentsError.value = toUiError(e)
@@ -304,32 +303,74 @@ async function onUnassignUser(userId: string) {
     }
 }
 
-async function loadProjectHoursReport(orgId: string) {
-    projectHoursReportLoading.value = true
-    projectHoursReportError.value = null
-
-    const toDate = new Date()
-    const fromDate = new Date(toDate)
-    fromDate.setDate(fromDate.getDate() - 29)
-
+async function loadApprovers(projectId: string) {
+    if (!organizationId.value) return
+    approversLoading.value = true
+    approversError.value = null
     try {
-        projectDailyHoursRows.value = await reportsApi.getProjectDailyHours(orgId, {
-            fromDate: formatDateForApi(fromDate),
-            toDate: formatDateForApi(toDate),
-        })
+        approvers.value = await projectsApi.getApprovers(organizationId.value, projectId)
+        setProjectApproverIds(
+            projectId,
+            approvers.value.map((approver) => approver.userId)
+        )
     } catch (e) {
-        projectDailyHoursRows.value = []
-        projectHoursReportError.value = toUiError(e)
+        console.error("Load approvers error:", e)
+        approversError.value = toUiError(e)
     } finally {
-        projectHoursReportLoading.value = false
+        approversLoading.value = false
     }
 }
 
-function formatDateForApi(date: Date) {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, "0")
-    const day = String(date.getDate()).padStart(2, "0")
-    return `${year}-${month}-${day}`
+async function toggleApprovers(projectId: string) {
+    assignApproverError.value = null
+    approversError.value = null
+    if (openApproversProjectId.value === projectId) {
+        openApproversProjectId.value = null
+        return
+    }
+    openAssignmentsProjectId.value = null
+    openApproversProjectId.value = projectId
+    assignApproverUserId.value = ""
+    await loadApprovers(projectId)
+}
+
+async function onAssignApprover() {
+    if (!organizationId.value || !openApproversProjectId.value) return
+    assignApproverError.value = null
+    const userId = assignApproverUserId.value?.trim()
+    if (!userId) {
+        assignApproverError.value = { title: "Approver required", message: "Select a member to assign." }
+        return
+    }
+    assignApproverLoading.value = true
+    try {
+        await projectsApi.assignApprover(organizationId.value, openApproversProjectId.value, { userId })
+        assignApproverUserId.value = ""
+        await loadApprovers(openApproversProjectId.value)
+    } catch (e) {
+        console.error("Assign approver error:", e)
+        assignApproverError.value = toUiError(e)
+    } finally {
+        assignApproverLoading.value = false
+    }
+}
+
+async function onUnassignApprover(userId: string) {
+    if (!organizationId.value || !openApproversProjectId.value) return
+    unassignApproverLoadingUserId.value = userId
+    try {
+        await projectsApi.unassignApprover(organizationId.value, openApproversProjectId.value, userId)
+        approvers.value = approvers.value.filter((approver) => approver.userId !== userId)
+        setProjectApproverIds(
+            openApproversProjectId.value,
+            approvers.value.map((approver) => approver.userId)
+        )
+    } catch (e) {
+        console.error("Unassign approver error:", e)
+        approversError.value = toUiError(e)
+    } finally {
+        unassignApproverLoadingUserId.value = null
+    }
 }
 </script>
 
@@ -346,7 +387,7 @@ function formatDateForApi(date: Date) {
         </div>
 
         <template v-else-if="loading && !projects.length">
-            <p class="muted">Loading projects…</p>
+            <p class="muted">Loading projects...</p>
         </template>
 
         <template v-else>
@@ -404,108 +445,129 @@ function formatDateForApi(date: Date) {
                     <div class="alert__msg">{{ addError.message }}</div>
                 </div>
                 <button type="submit" class="btn btn-primary" :disabled="addLoading">
-                    {{ addLoading ? "Creating…" : "Create project" }}
+                    {{ addLoading ? "Creating..." : "Create project" }}
                 </button>
             </form>
 
             <div class="projects__list-wrap">
-                <table class="projects-table" v-if="projects.length">
+                <table v-if="projects.length" class="projects-table">
                     <thead>
                         <tr>
                             <th>Name</th>
                             <th>Client</th>
                             <th>Status</th>
+                            <th>Approvers</th>
                             <th class="projects-table__actions">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <template v-for="project in projects" :key="project.id">
                             <tr>
-                            <td>
-                                <template v-if="editingProjectId === project.id">
-                                    <input
-                                        v-model.trim="editForm.name"
-                                        type="text"
-                                        class="edit-input"
-                                        placeholder="Project name"
-                                        @keydown.enter.prevent="onUpdateProject"
-                                    />
-                                </template>
-                                <span v-else class="project-name">{{ project.name }}</span>
-                            </td>
-                            <td>
-                                <template v-if="editingProjectId === project.id">
-                                    <select v-model="editForm.clientId" class="edit-input">
-                                        <option value="">Unassigned</option>
-                                        <option
-                                            v-for="client in clients"
-                                            :key="client.id"
-                                            :value="client.id"
-                                        >
-                                            {{ client.name }}
-                                        </option>
-                                    </select>
-                                </template>
-                                <span v-else>{{ clientName(project) }}</span>
-                            </td>
-                            <td>
-                                <template v-if="editingProjectId === project.id">
-                                    <label class="checkbox-inline">
-                                        <input v-model="editForm.isActive" type="checkbox" />
-                                        <span>Active</span>
-                                    </label>
-                                    <div class="edit-actions">
+                                <td>
+                                    <template v-if="editingProjectId === project.id">
+                                        <input
+                                            v-model.trim="editForm.name"
+                                            type="text"
+                                            class="edit-input"
+                                            placeholder="Project name"
+                                            @keydown.enter.prevent="onUpdateProject"
+                                        />
+                                    </template>
+                                    <span v-else class="project-name">{{ project.name }}</span>
+                                </td>
+                                <td>
+                                    <template v-if="editingProjectId === project.id">
+                                        <select v-model="editForm.clientId" class="edit-input">
+                                            <option value="">Unassigned</option>
+                                            <option
+                                                v-for="client in clients"
+                                                :key="client.id"
+                                                :value="client.id"
+                                            >
+                                                {{ client.name }}
+                                            </option>
+                                        </select>
+                                    </template>
+                                    <span v-else>{{ clientName(project) }}</span>
+                                </td>
+                                <td>
+                                    <template v-if="editingProjectId === project.id">
+                                        <label class="checkbox-inline">
+                                            <input v-model="editForm.isActive" type="checkbox" />
+                                            <span>Active</span>
+                                        </label>
+                                        <div class="edit-actions">
+                                            <button
+                                                type="button"
+                                                class="btn btn-primary btn-sm"
+                                                :disabled="updateLoading"
+                                                @click="onUpdateProject"
+                                            >
+                                                {{ updateLoading ? "Saving..." : "Save" }}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="btn btn-secondary btn-sm"
+                                                :disabled="updateLoading"
+                                                @click="cancelEdit"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                        <div v-if="updateError" class="alert alert--inline">
+                                            {{ updateError.message }}
+                                        </div>
+                                    </template>
+                                    <span
+                                        v-else
+                                        :class="[
+                                            'status-badge',
+                                            project.isActive !== false ? 'status-badge--active' : 'status-badge--inactive',
+                                        ]"
+                                    >
+                                        {{ project.isActive !== false ? "Active" : "Inactive" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="approvers-summary">{{ projectApproverNames(project) }}</span>
+                                </td>
+                                <td class="projects-table__actions">
+                                    <div class="row-actions">
                                         <button
                                             type="button"
-                                            class="btn btn-primary btn-sm"
-                                            :disabled="updateLoading"
-                                            @click="onUpdateProject"
+                                            class="btn btn-secondary btn-sm"
+                                            :aria-expanded="openAssignmentsProjectId === project.id"
+                                            @click="toggleAssignments(project.id)"
                                         >
-                                            {{ updateLoading ? "Saving…" : "Save" }}
+                                            {{ openAssignmentsProjectId === project.id ? "Hide team" : "Team" }}
                                         </button>
                                         <button
                                             type="button"
                                             class="btn btn-secondary btn-sm"
-                                            :disabled="updateLoading"
-                                            @click="cancelEdit"
+                                            :aria-expanded="openApproversProjectId === project.id"
+                                            @click="toggleApprovers(project.id)"
                                         >
-                                            Cancel
+                                            {{ openApproversProjectId === project.id ? "Hide approvers" : "Approvers" }}
+                                        </button>
+                                        <button
+                                            v-if="editingProjectId !== project.id"
+                                            type="button"
+                                            class="btn btn-secondary btn-sm"
+                                            aria-label="Edit project"
+                                            @click="startEdit(project)"
+                                        >
+                                            Edit
                                         </button>
                                     </div>
-                                    <div v-if="updateError" class="alert alert--inline">
-                                        {{ updateError.message }}
-                                    </div>
-                                </template>
-                                <span v-else :class="['status-badge', project.isActive !== false ? 'status-badge--active' : 'status-badge--inactive']">
-                                    {{ project.isActive !== false ? "Active" : "Inactive" }}
-                                </span>
-                            </td>
-                            <td class="projects-table__actions">
-                                <div class="row-actions">
-                                    <button
-                                        type="button"
-                                        class="btn btn-secondary btn-sm"
-                                        :aria-expanded="openAssignmentsProjectId === project.id"
-                                        @click="toggleAssignments(project.id)"
-                                    >
-                                        {{ openAssignmentsProjectId === project.id ? "Hide team" : "Team" }}
-                                    </button>
-                                    <button
-                                        v-if="editingProjectId !== project.id"
-                                        type="button"
-                                        class="btn btn-secondary btn-sm"
-                                        aria-label="Edit project"
-                                        @click="startEdit(project)"
-                                    >
-                                        Edit
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
-                            <tr v-if="openAssignmentsProjectId === project.id" class="projects-table__expanded">
-                                <td :colspan="4">
-                                    <div class="assignments">
-                                        <div class="assignments__head">
+                                </td>
+                            </tr>
+                            <tr
+                                v-if="openAssignmentsProjectId === project.id"
+                                class="projects-table__expanded"
+                            >
+                                <td :colspan="5">
+                                    <div class="detail-panel">
+                                        <div class="detail-panel__head">
                                             <strong>Assigned team members</strong>
                                             <button
                                                 type="button"
@@ -523,26 +585,30 @@ function formatDateForApi(date: Date) {
 
                                         <p v-else-if="assignmentsLoading" class="muted">Loading assignments...</p>
 
-                                        <ul v-else-if="assignments.length" class="assignments__list">
-                                            <li v-for="a in assignments" :key="a.id" class="assignments__item">
-                                                <div class="assignments__who">
-                                                    <span class="assignments__name">{{ memberDisplayNameByUserId(a.userId) }}</span>
+                                        <ul v-else-if="assignments.length" class="detail-panel__list">
+                                            <li
+                                                v-for="assignment in assignments"
+                                                :key="assignment.id"
+                                                class="detail-panel__item"
+                                            >
+                                                <div class="detail-panel__who">
+                                                    <span class="detail-panel__name">{{ memberDisplayNameByUserId(assignment.userId) }}</span>
                                                 </div>
                                                 <button
                                                     v-if="isManagerOrAdmin"
                                                     type="button"
                                                     class="btn btn-secondary btn-sm"
-                                                    :disabled="unassignLoadingUserId === a.userId"
-                                                    @click="onUnassignUser(a.userId)"
+                                                    :disabled="unassignLoadingUserId === assignment.userId"
+                                                    @click="onUnassignUser(assignment.userId)"
                                                 >
-                                                    {{ unassignLoadingUserId === a.userId ? "Removing..." : "Remove" }}
+                                                    {{ unassignLoadingUserId === assignment.userId ? "Removing..." : "Remove" }}
                                                 </button>
                                             </li>
                                         </ul>
 
                                         <p v-else class="muted">No team members assigned yet.</p>
 
-                                        <div v-if="isManagerOrAdmin" class="assignments__add">
+                                        <div v-if="isManagerOrAdmin" class="detail-panel__add">
                                             <label class="form-field">
                                                 <span class="form-field__label">Assign a member</span>
                                                 <select
@@ -550,8 +616,12 @@ function formatDateForApi(date: Date) {
                                                     :disabled="assignLoading || !assignCandidates.length"
                                                 >
                                                     <option value="">Select a member...</option>
-                                                    <option v-for="m in assignCandidates" :key="m.userId" :value="m.userId">
-                                                        {{ memberDisplayNameByUserId(m.userId) }}
+                                                    <option
+                                                        v-for="member in assignCandidates"
+                                                        :key="member.userId"
+                                                        :value="member.userId"
+                                                    >
+                                                        {{ memberDisplayNameByUserId(member.userId) }}
                                                     </option>
                                                 </select>
                                             </label>
@@ -572,38 +642,96 @@ function formatDateForApi(date: Date) {
                                     </div>
                                 </td>
                             </tr>
+                            <tr
+                                v-if="openApproversProjectId === project.id"
+                                class="projects-table__expanded"
+                            >
+                                <td :colspan="5">
+                                    <div class="detail-panel">
+                                        <div class="detail-panel__head">
+                                            <strong>Project approvers</strong>
+                                            <button
+                                                type="button"
+                                                class="btn btn-secondary btn-sm"
+                                                :disabled="approversLoading"
+                                                @click="loadApprovers(project.id)"
+                                            >
+                                                Refresh
+                                            </button>
+                                        </div>
+
+                                        <div v-if="approversError" class="alert alert--inline" role="alert">
+                                            {{ approversError.message }}
+                                        </div>
+
+                                        <p v-else-if="approversLoading" class="muted">Loading approvers...</p>
+
+                                        <ul v-else-if="approvers.length" class="detail-panel__list">
+                                            <li
+                                                v-for="approver in approvers"
+                                                :key="approver.id"
+                                                class="detail-panel__item"
+                                            >
+                                                <div class="detail-panel__who">
+                                                    <span class="detail-panel__name">{{ memberDisplayNameByUserId(approver.userId) }}</span>
+                                                </div>
+                                                <button
+                                                    v-if="isAdmin"
+                                                    type="button"
+                                                    class="btn btn-secondary btn-sm"
+                                                    :disabled="unassignApproverLoadingUserId === approver.userId"
+                                                    @click="onUnassignApprover(approver.userId)"
+                                                >
+                                                    {{ unassignApproverLoadingUserId === approver.userId ? "Removing..." : "Remove" }}
+                                                </button>
+                                            </li>
+                                        </ul>
+
+                                        <p v-else class="muted">No approvers assigned yet.</p>
+
+                                        <div v-if="isAdmin" class="detail-panel__add">
+                                            <label class="form-field">
+                                                <span class="form-field__label">Assign an approver</span>
+                                                <select
+                                                    v-model="assignApproverUserId"
+                                                    :disabled="assignApproverLoading || !approverCandidates.length"
+                                                >
+                                                    <option value="">Select a member...</option>
+                                                    <option
+                                                        v-for="member in approverCandidates"
+                                                        :key="member.userId"
+                                                        :value="member.userId"
+                                                    >
+                                                        {{ memberDisplayNameByUserId(member.userId) }}
+                                                    </option>
+                                                </select>
+                                            </label>
+                                            <button
+                                                type="button"
+                                                class="btn btn-primary btn-sm"
+                                                :disabled="assignApproverLoading || !approverCandidates.length"
+                                                @click="onAssignApprover"
+                                            >
+                                                {{ assignApproverLoading ? "Assigning..." : "Assign" }}
+                                            </button>
+                                            <div
+                                                v-if="assignApproverError"
+                                                class="alert alert--inline"
+                                                role="alert"
+                                            >
+                                                {{ assignApproverError.message }}
+                                            </div>
+                                        </div>
+
+                                        <p v-else class="muted">Only admins can change project approvers.</p>
+                                    </div>
+                                </td>
+                            </tr>
                         </template>
                     </tbody>
                 </table>
                 <p v-else class="muted">No projects yet. Create one above.</p>
             </div>
-
-            <section class="projects-report">
-                <div class="projects-report__head">
-                    <h2 class="projects-report__title">Project Hours (Last 30 Days)</h2>
-                    <span class="projects-report__meta">{{ projectHoursTotalHours.toFixed(1) }} total hours</span>
-                </div>
-
-                <p v-if="projectHoursReportLoading" class="muted">Loading report...</p>
-
-                <div v-else-if="projectHoursReportError" class="alert alert--inline" role="alert">
-                    {{ projectHoursReportError.message }}
-                </div>
-
-                <div v-else-if="projectHoursByProject.length" class="report-bars">
-                    <div v-for="item in projectHoursByProject" :key="item.projectId" class="report-bars__row">
-                        <div class="report-bars__labels">
-                            <span class="report-bars__name">{{ item.label }}</span>
-                            <span class="report-bars__value">{{ item.totalHours.toFixed(1) }}h</span>
-                        </div>
-                        <div class="report-bars__track">
-                            <div class="report-bars__fill" :style="{ width: `${item.percent}%` }"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <p v-else class="muted">No report data for the last 30 days.</p>
-            </section>
         </template>
     </section>
 </template>
@@ -699,68 +827,6 @@ function formatDateForApi(date: Date) {
     overflow-x: auto;
 }
 
-.projects-report {
-    margin-top: var(--s-5);
-    padding-top: var(--s-4);
-    border-top: 1px solid var(--border);
-}
-
-.projects-report__head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: var(--s-3);
-    margin-bottom: var(--s-3);
-}
-
-.projects-report__title {
-    margin: 0;
-    font-size: 1rem;
-}
-
-.projects-report__meta {
-    color: var(--text-2);
-    font-size: 0.875rem;
-}
-
-.report-bars {
-    display: grid;
-    gap: var(--s-3);
-}
-
-.report-bars__row {
-    display: grid;
-    gap: var(--s-1);
-}
-
-.report-bars__labels {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--s-3);
-    font-size: 0.875rem;
-}
-
-.report-bars__name {
-    font-weight: 600;
-}
-
-.report-bars__value {
-    color: var(--text-2);
-}
-
-.report-bars__track {
-    height: 10px;
-    border-radius: var(--r-pill);
-    background: var(--surface-2);
-    overflow: hidden;
-}
-
-.report-bars__fill {
-    height: 100%;
-    border-radius: inherit;
-    background: linear-gradient(90deg, #0f766e, #14b8a6);
-}
-
 .projects-table {
     width: 100%;
     border-collapse: collapse;
@@ -771,6 +837,7 @@ function formatDateForApi(date: Date) {
     padding: var(--s-3) var(--s-4);
     text-align: left;
     border-bottom: 1px solid var(--border);
+    vertical-align: top;
 }
 
 .projects-table th {
@@ -782,11 +849,18 @@ function formatDateForApi(date: Date) {
 }
 
 .projects-table__actions {
-    width: 170px;
+    width: 200px;
 }
 
 .project-name {
     font-weight: 600;
+}
+
+.approvers-summary {
+    display: inline-block;
+    min-width: 180px;
+    color: var(--text-2);
+    font-size: 0.875rem;
 }
 
 .edit-input {
@@ -845,7 +919,7 @@ function formatDateForApi(date: Date) {
     background: var(--surface-2);
 }
 
-.assignments {
+.detail-panel {
     display: grid;
     gap: var(--s-3);
     padding: var(--s-3);
@@ -854,14 +928,14 @@ function formatDateForApi(date: Date) {
     background: var(--surface);
 }
 
-.assignments__head {
+.detail-panel__head {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: var(--s-3);
 }
 
-.assignments__list {
+.detail-panel__list {
     list-style: none;
     padding: 0;
     margin: 0;
@@ -869,7 +943,7 @@ function formatDateForApi(date: Date) {
     gap: var(--s-2);
 }
 
-.assignments__item {
+.detail-panel__item {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -880,16 +954,16 @@ function formatDateForApi(date: Date) {
     background: var(--surface);
 }
 
-.assignments__who {
+.detail-panel__who {
     display: grid;
     gap: 2px;
 }
 
-.assignments__name {
+.detail-panel__name {
     font-weight: 600;
 }
 
-.assignments__add {
+.detail-panel__add {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-3);

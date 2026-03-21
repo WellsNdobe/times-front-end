@@ -1,4 +1,4 @@
-// app/api/projectsApi.ts – matches backend api/v1/organizations/{organizationId}/projects
+// app/api/projectsApi.ts - matches backend api/v1/organizations/{organizationId}/projects
 import { apiClient } from "~/api/apiClient"
 
 export type Project = {
@@ -8,6 +8,7 @@ export type Project = {
     clientName?: string
     isActive?: boolean
     organizationId?: string
+    approverUserIds?: string[]
     [key: string]: unknown
 }
 
@@ -37,12 +38,24 @@ export type ProjectAssignment = {
     [key: string]: unknown
 }
 
+export type ProjectApprover = {
+    id: string
+    projectId: string
+    userId: string
+    assignedByUserId?: string
+    assignedAtUtc: string
+    [key: string]: unknown
+}
+
 export type AssignUserToProjectRequest = {
     userId: string
 }
 
+export type AssignApproverToProjectRequest = {
+    userId: string
+}
+
 export const projectsApi = {
-    /** POST api/v1/organizations/{organizationId}/projects */
     create(organizationId: string, payload: CreateProjectRequest) {
         return apiClient<Project>(`/v1/organizations/${organizationId}/projects`, {
             method: "POST",
@@ -50,7 +63,6 @@ export const projectsApi = {
         })
     },
 
-    /** GET api/v1/organizations/{organizationId}/projects */
     list(organizationId: string, params?: ListProjectsParams) {
         const search = new URLSearchParams()
         if (params?.isActive !== undefined) search.set("isActive", String(params.isActive))
@@ -60,7 +72,6 @@ export const projectsApi = {
         return apiClient<Project[]>(url, { method: "GET" })
     },
 
-    /** GET api/v1/organizations/{organizationId}/projects/{projectId} */
     getById(organizationId: string, projectId: string) {
         return apiClient<Project>(
             `/v1/organizations/${organizationId}/projects/${projectId}`,
@@ -68,7 +79,6 @@ export const projectsApi = {
         )
     },
 
-    /** PATCH api/v1/organizations/{organizationId}/projects/{projectId} */
     update(organizationId: string, projectId: string, payload: UpdateProjectRequest) {
         return apiClient<Project>(
             `/v1/organizations/${organizationId}/projects/${projectId}`,
@@ -76,7 +86,6 @@ export const projectsApi = {
         )
     },
 
-    /** GET api/v1/organizations/{organizationId}/projects/{projectId}/assignments */
     getAssignments(organizationId: string, projectId: string) {
         return apiClient<ProjectAssignment[]>(
             `/v1/organizations/${organizationId}/projects/${projectId}/assignments`,
@@ -84,7 +93,6 @@ export const projectsApi = {
         )
     },
 
-    /** POST api/v1/organizations/{organizationId}/projects/{projectId}/assignments */
     assignUser(organizationId: string, projectId: string, payload: AssignUserToProjectRequest) {
         return apiClient<ProjectAssignment>(
             `/v1/organizations/${organizationId}/projects/${projectId}/assignments`,
@@ -92,10 +100,30 @@ export const projectsApi = {
         )
     },
 
-    /** DELETE api/v1/organizations/{organizationId}/projects/{projectId}/assignments/{userId} */
     unassignUser(organizationId: string, projectId: string, userId: string) {
         return apiClient<void>(
             `/v1/organizations/${organizationId}/projects/${projectId}/assignments/${userId}`,
+            { method: "DELETE" }
+        )
+    },
+
+    getApprovers(organizationId: string, projectId: string) {
+        return apiClient<ProjectApprover[]>(
+            `/v1/organizations/${organizationId}/projects/${projectId}/approvers`,
+            { method: "GET" }
+        )
+    },
+
+    assignApprover(organizationId: string, projectId: string, payload: AssignApproverToProjectRequest) {
+        return apiClient<ProjectApprover>(
+            `/v1/organizations/${organizationId}/projects/${projectId}/approvers`,
+            { method: "POST", body: payload }
+        )
+    },
+
+    unassignApprover(organizationId: string, projectId: string, userId: string) {
+        return apiClient<void>(
+            `/v1/organizations/${organizationId}/projects/${projectId}/approvers/${userId}`,
             { method: "DELETE" }
         )
     },

@@ -28,7 +28,7 @@ type WorkingDay = {
     displayDate: string
 }
 
-const WORKING_DAY_COUNT = 5
+const WEEK_DAY_COUNT = 7
 
 const org = ref<Organization | null>(null)
 const projects = ref<Project[]>([])
@@ -360,7 +360,7 @@ function getWeekStart(date: Date) {
 function getWorkingDays(weekStart: string) {
     const start = parseDateInput(weekStart)
     const days: WorkingDay[] = []
-    for (let i = 0; i < WORKING_DAY_COUNT; i += 1) {
+    for (let i = 0; i < WEEK_DAY_COUNT; i += 1) {
         const date = addDays(start, i)
         days.push({
             key: `${weekStart}-${i}`,

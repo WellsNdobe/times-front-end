@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ middleware: ["auth", "manager-only"] })
+definePageMeta({ middleware: ["auth"] })
 
 import { computed, onMounted, ref } from "vue"
 import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
@@ -47,10 +47,13 @@ const myMember = computed(() => {
     return members.value.find((m) => m.userId === user.value?.userId) ?? null
 })
 
-const isManagerOrAdmin = computed(() => {
-    if (!myMember.value) return false
-    return myMember.value.role === 0 || myMember.value.role === 1
+const isProjectApprover = computed(() => {
+    const userId = user.value?.userId
+    if (!userId) return false
+    return projects.value.some((project) => (project.approverUserIds as string[] | undefined)?.includes(userId))
 })
+
+const canReviewApprovals = computed(() => isProjectApprover.value || approvals.value.length > 0)
 
 function displayName(userId?: string) {
     if (!userId) return "Unknown member"
@@ -201,10 +204,10 @@ onMounted(loadApprovals)
             </div>
             <div class="approvals__meta">
                 <span class="approvals__meta-label">
-                    {{ isManagerOrAdmin ? "Pending" : "My submissions" }}
+                    {{ canReviewApprovals ? "Pending" : "My submissions" }}
                 </span>
                 <span class="approvals__meta-value">
-                    {{ isManagerOrAdmin ? approvals.length : mySubmissions.length }}
+                    {{ canReviewApprovals ? approvals.length : mySubmissions.length }}
                 </span>
             </div>
         </header>
@@ -220,7 +223,7 @@ onMounted(loadApprovals)
 
         <template v-else>
             <div class="approvals__table-wrap">
-                <table class="approvals-table" v-if="isManagerOrAdmin && approvals.length">
+                <table class="approvals-table" v-if="canReviewApprovals && approvals.length">
                     <thead>
                         <tr>
                             <th>Employee</th>
@@ -337,7 +340,7 @@ onMounted(loadApprovals)
                         </template>
                     </tbody>
                 </table>
-                <table class="approvals-table" v-else-if="!isManagerOrAdmin && mySubmissions.length">
+                <table class="approvals-table" v-else-if="!canReviewApprovals && mySubmissions.length">
                     <thead>
                         <tr>
                             <th>Week</th>
@@ -362,7 +365,7 @@ onMounted(loadApprovals)
                     </tbody>
                 </table>
                 <p v-else class="muted">
-                    {{ isManagerOrAdmin ? "No pending approvals." : "No submissions yet." }}
+                    {{ canReviewApprovals ? "No pending approvals." : "No submissions yet." }}
                 </p>
             </div>
         </template>
