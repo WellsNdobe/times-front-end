@@ -254,6 +254,10 @@ async function startTimerSession() {
         })
         applyActiveSession(session)
     } catch (e) {
+        if (isTrackerUnavailableError(e)) {
+            startLocalSession()
+            return
+        }
         localError.value = toUiError(e)
     } finally {
         saving.value = false
@@ -266,9 +270,11 @@ async function stopAndSave() {
 
     saving.value = true
     try {
-        const createdEntry = await trackerApi.stop(organizationId.value, {
-            notes: notes.value.trim() || null,
-        })
+        const createdEntry = activeSessionId.value
+            ? await trackerApi.stop(organizationId.value, {
+                notes: notes.value.trim() || null,
+            })
+            : await createEntryFromLocalSession()
         mergeCreatedEntry(createdEntry)
         clearActiveSession()
         await refreshEntries()
@@ -392,7 +398,7 @@ async function getActiveSession(orgId: string) {
     try {
         return await trackerApi.get(orgId)
     } catch (e: any) {
-        if (e?.status === 404 || e?.response?.status === 404) return null
+        if (isTrackerUnavailableError(e)) return null
         throw e
     }
 }
@@ -414,6 +420,32 @@ function clearActiveSession() {
     sessionStartedAt.value = null
     stopTicker()
     clearNotesSyncTimer()
+}
+
+function startLocalSession() {
+    activeSessionId.value = null
+    running.value = true
+    sessionStartedAt.value = new Date()
+    now.value = Date.now()
+    startTicker()
+}
+
+async function createEntryFromLocalSession() {
+    if (!organizationId.value || !timesheet.value?.id || !sessionStartedAt.value) {
+        throw new Error("Unable to save local timer session.")
+    }
+
+    const stopAt = new Date()
+    const durationMinutes = Math.max(1, Math.round((stopAt.getTime() - sessionStartedAt.value.getTime()) / 60000))
+
+    return await timesheetEntriesApi.create(organizationId.value, timesheet.value.id, {
+        projectId: selectedProjectId.value,
+        workDate: workDate.value,
+        startTime: formatTimeForApi(sessionStartedAt.value),
+        endTime: formatTimeForApi(stopAt),
+        durationMinutes,
+        notes: notes.value.trim() || null,
+    })
 }
 
 function queueSessionNotesSync() {
@@ -494,6 +526,17 @@ function formatDateLong(value: string) {
 function parseUtcDateTime(value: string) {
     const normalized = /z$|[+-]\d{2}:\d{2}$/i.test(value) ? value : `${value}Z`
     return new Date(normalized)
+}
+
+function formatTimeForApi(date: Date) {
+    const hours = String(date.getHours()).padStart(2, "0")
+    const minutes = String(date.getMinutes()).padStart(2, "0")
+    return `${hours}:${minutes}`
+}
+
+function isTrackerUnavailableError(error: any) {
+    const status = error?.status ?? error?.response?.status
+    return status === 404 || status === 405 || status === 501
 }
 </script>
 
@@ -748,7 +791,7 @@ function parseUtcDateTime(value: string) {
 <style scoped>
 .track-page {
     display: grid;
-    gap: 24px;
+    gap: var(--s-4);
 }
 
 .track-page__header {
@@ -759,24 +802,24 @@ function parseUtcDateTime(value: string) {
 }
 
 .track-page__eyebrow {
-    margin: 0 0 8px;
-    color: var(--primary);
-    font-size: 0.95rem;
-    font-weight: 800;
+    margin: 0 0 var(--s-1);
+    color: var(--text-3);
+    font-size: 0.75rem;
+    font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
 .track-page__title {
     margin: 0;
-    font-size: clamp(1.9rem, 3vw, 2.6rem);
-    line-height: 1.05;
+    font-size: clamp(1.4rem, 3vw, 2rem);
+    line-height: 1.1;
 }
 
 .track-page__subtitle {
-    margin: 10px 0 0;
+    margin: var(--s-1) 0 0;
     color: var(--text-2);
-    font-size: 1rem;
+    font-size: 0.9rem;
 }
 
 .track-page__badges {
@@ -789,15 +832,15 @@ function parseUtcDateTime(value: string) {
 .track-badge {
     display: inline-flex;
     align-items: center;
-    min-height: 40px;
-    padding: 0 16px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.78);
-    border: 1px solid rgba(15, 118, 110, 0.12);
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: var(--r-pill);
+    background: var(--surface);
+    border: 1px solid var(--border);
     color: var(--text-2);
-    font-size: 0.95rem;
+    font-size: 0.875rem;
     font-weight: 700;
-    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+    box-shadow: var(--shadow-sm);
 }
 
 .track-badge--strong {
@@ -807,14 +850,14 @@ function parseUtcDateTime(value: string) {
 .track-panel,
 .track-hero,
 .track-stat-card {
-    border-radius: 24px;
-    border: 1px solid rgba(15, 118, 110, 0.12);
-    background: rgba(255, 255, 255, 0.88);
-    box-shadow: 0 18px 40px rgba(148, 163, 184, 0.14);
+    border-radius: var(--r-lg);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
 }
 
 .track-panel {
-    padding: 24px;
+    padding: var(--s-4);
 }
 
 .track-panel--loading {
@@ -838,27 +881,24 @@ function parseUtcDateTime(value: string) {
 .track-hero {
     display: grid;
     grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.9fr);
-    gap: 24px;
-    padding: 32px 40px;
-    background:
-        radial-gradient(circle at top right, rgba(45, 212, 191, 0.16), transparent 34%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(242, 251, 250, 0.96) 100%);
+    gap: var(--s-4);
+    padding: var(--s-5);
 }
 
 .track-hero__content {
     display: grid;
     align-content: start;
-    gap: 16px;
+    gap: var(--s-3);
 }
 
 .track-hero__status {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    color: #0891b2;
-    font-size: 0.95rem;
-    font-weight: 800;
-    letter-spacing: 0.12em;
+    gap: var(--s-2);
+    color: var(--text-3);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
@@ -871,16 +911,15 @@ function parseUtcDateTime(value: string) {
 
 .track-hero__title {
     margin: 0;
-    font-size: clamp(2rem, 4vw, 3rem);
-    line-height: 1.02;
-    letter-spacing: -0.03em;
+    font-size: clamp(1.2rem, 2.2vw, 1.85rem);
+    line-height: 1.1;
 }
 
 .track-hero__meta {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 16px;
+    gap: var(--s-3);
     color: var(--text-2);
 }
 
@@ -888,12 +927,11 @@ function parseUtcDateTime(value: string) {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    min-height: 48px;
-    padding: 0 14px;
-    border-radius: 14px;
-    background: #eef3fb;
-    border: 1px solid rgba(148, 163, 184, 0.18);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    min-height: 42px;
+    padding: 0 12px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
 }
 
 .track-project-pill__select {
@@ -902,7 +940,7 @@ function parseUtcDateTime(value: string) {
     background: transparent;
     box-shadow: none;
     color: var(--text-1);
-    font-weight: 700;
+    font-weight: 600;
     min-width: 160px;
 }
 
@@ -919,24 +957,24 @@ function parseUtcDateTime(value: string) {
 .track-hero__meta-text,
 .track-hero__summary {
     margin: 0;
-    color: #64748b;
-    font-size: 1.05rem;
+    color: var(--text-2);
+    font-size: 0.9rem;
 }
 
 .track-hero__timer-panel {
     display: grid;
     align-content: center;
     justify-items: end;
-    gap: 24px;
+    gap: var(--s-4);
 }
 
 .track-hero__timer {
     margin: 0;
-    font-size: clamp(3rem, 6vw, 5.5rem);
-    line-height: 0.9;
-    font-weight: 900;
-    letter-spacing: -0.06em;
-    color: #0f172a;
+    font-size: clamp(2rem, 4.2vw, 3.25rem);
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text-1);
     font-variant-numeric: tabular-nums;
 }
 
@@ -951,38 +989,38 @@ function parseUtcDateTime(value: string) {
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    min-height: 62px;
-    padding: 0 28px;
-    border-radius: 16px;
-    font-size: 1.05rem;
-    font-weight: 800;
-    box-shadow: 0 14px 24px rgba(15, 118, 110, 0.16);
+    min-height: 42px;
+    padding: 0 14px;
+    border-radius: var(--r-sm);
+    font-size: 0.95rem;
+    font-weight: 700;
+    box-shadow: none;
 }
 
 .track-btn--primary {
-    background: linear-gradient(135deg, #14b8a6 0%, var(--primary) 100%);
+    background: var(--primary);
 }
 
 .track-btn--primary:hover {
-    background: linear-gradient(135deg, #0f9f90 0%, #0b5f59 100%);
+    background: var(--primary-hover);
 }
 
 .track-btn--secondary {
-    background: #eff4fb;
-    border-color: #e2e8f0;
-    color: #1e3a5f;
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--text-1);
     box-shadow: none;
 }
 
 .track-btn--secondary:hover {
-    background: #e6edf8;
+    background: var(--surface-2);
 }
 
 .track-controls {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
-    margin-bottom: 16px;
+    gap: var(--s-3);
+    margin-bottom: var(--s-3);
 }
 
 .track-field {
@@ -993,22 +1031,22 @@ function parseUtcDateTime(value: string) {
 
 .track-field__label {
     color: var(--text-2);
-    font-size: 0.82rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
 .track-field--summary {
     justify-content: center;
-    padding: 14px 18px;
-    border-radius: 18px;
-    background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
-    border: 1px solid rgba(148, 163, 184, 0.18);
+    padding: var(--s-3);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
 }
 
 .track-field--summary strong {
-    font-size: 1.6rem;
+    font-size: clamp(1.2rem, 2.2vw, 1.85rem);
     line-height: 1;
 }
 
@@ -1024,7 +1062,7 @@ function parseUtcDateTime(value: string) {
 
 .track-log {
     display: grid;
-    gap: 18px;
+    gap: var(--s-3);
 }
 
 .track-log__header {
@@ -1036,15 +1074,13 @@ function parseUtcDateTime(value: string) {
 
 .track-log__title {
     margin: 0;
-    font-size: 2rem;
-    letter-spacing: -0.04em;
+    font-size: 1rem;
 }
 
 .track-log__subtitle {
-    margin: 8px 0 0;
+    margin: var(--s-1) 0 0;
     color: var(--text-2);
-    font-size: 0.95rem;
-    font-weight: 600;
+    font-size: 0.875rem;
 }
 
 .track-log__summary {
@@ -1057,37 +1093,36 @@ function parseUtcDateTime(value: string) {
 
 .track-log__summary strong {
     color: var(--primary);
-    font-size: 1.7rem;
-    letter-spacing: 0.08em;
+    font-size: clamp(1.2rem, 2.2vw, 1.85rem);
     font-variant-numeric: tabular-nums;
 }
 
 .track-log__table {
-    border-radius: 20px;
+    border-radius: var(--r-sm);
     overflow: hidden;
-    border: 1px solid rgba(226, 232, 240, 0.9);
+    border: 1px solid var(--border);
 }
 
 .track-log__row {
     display: grid;
     grid-template-columns: minmax(180px, 1.1fr) minmax(220px, 1.8fr) 160px 120px;
-    gap: 18px;
+    gap: var(--s-3);
     align-items: center;
-    padding: 18px 28px;
-    background: rgba(255, 255, 255, 0.92);
+    padding: var(--s-3) var(--s-4);
+    background: var(--surface);
 }
 
 .track-log__head {
-    background: linear-gradient(180deg, #fbfdff 0%, #f7faff 100%);
-    color: #64748b;
+    background: var(--surface-2);
+    color: var(--text-2);
     font-size: 0.8rem;
-    font-weight: 800;
-    letter-spacing: 0.1em;
+    font-weight: 700;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
 .track-entry + .track-entry {
-    border-top: 1px solid rgba(226, 232, 240, 0.9);
+    border-top: 1px solid var(--border);
 }
 
 .track-entry__project,
@@ -1101,7 +1136,7 @@ function parseUtcDateTime(value: string) {
 .track-entry__project strong,
 .track-entry__task strong {
     display: block;
-    font-size: 1.08rem;
+    font-size: 0.95rem;
 }
 
 .track-entry__project p,
@@ -1119,14 +1154,14 @@ function parseUtcDateTime(value: string) {
 
 .track-entry__duration {
     justify-self: start;
-    padding: 8px 14px;
-    border-radius: 12px;
-    background: #eef3fb;
-    color: #1e3a5f;
+    padding: 6px 10px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text-1);
     font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 1.05rem;
+    font-size: 0.95rem;
     font-weight: 700;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.02em;
 }
 
 .track-entry__actions {
@@ -1136,61 +1171,60 @@ function parseUtcDateTime(value: string) {
 .track-stats {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 20px;
+    gap: var(--s-3);
 }
 
 .track-stat-card {
-    padding: 28px;
+    padding: var(--s-4);
     display: grid;
-    gap: 14px;
+    gap: var(--s-3);
 }
 
 .track-stat-card__header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    color: #64748b;
-    font-size: 0.88rem;
-    font-weight: 800;
-    letter-spacing: 0.12em;
+    color: var(--text-2);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
 .track-stat-card__value {
-    font-size: clamp(2rem, 4vw, 3rem);
+    font-size: clamp(1.2rem, 2.2vw, 1.85rem);
     line-height: 1;
-    letter-spacing: -0.05em;
+    letter-spacing: -0.01em;
 }
 
 .track-stat-card p {
     margin: 0;
     color: var(--text-2);
-    font-size: 1rem;
+    font-size: 0.9rem;
 }
 
 .track-progress {
     position: relative;
     overflow: hidden;
     height: 10px;
-    border-radius: 999px;
-    background: #e8edf5;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
 }
 
 .track-progress__bar {
     position: absolute;
     inset: 0 auto 0 0;
     border-radius: inherit;
-    background: linear-gradient(90deg, #22c1b4 0%, var(--primary) 100%);
+    background: var(--primary);
 }
 
 .track-stat-card--accent {
-    background: linear-gradient(135deg, #11998e 0%, var(--primary) 100%);
-    color: white;
+    border-left: 4px solid var(--accent);
 }
 
 .track-stat-card--accent .track-stat-card__header,
 .track-stat-card--accent p {
-    color: rgba(255, 255, 255, 0.84);
+    color: var(--text-2);
 }
 
 .btn-sm {
@@ -1265,13 +1299,13 @@ function parseUtcDateTime(value: string) {
         grid-template-columns: 1fr;
         gap: 12px;
         margin-bottom: 14px;
-        border: 1px solid rgba(226, 232, 240, 0.9);
-        border-radius: 18px;
-        box-shadow: 0 14px 24px rgba(148, 163, 184, 0.08);
+        border: 1px solid var(--border);
+        border-radius: var(--r-sm);
+        box-shadow: var(--shadow-sm);
     }
 
     .track-entry + .track-entry {
-        border-top: 1px solid rgba(226, 232, 240, 0.9);
+        border-top: 1px solid var(--border);
     }
 
     .track-entry__project,
@@ -1288,14 +1322,14 @@ function parseUtcDateTime(value: string) {
 
 @media (max-width: 640px) {
     .track-page {
-        gap: 18px;
+        gap: var(--s-3);
     }
 
     .track-panel,
     .track-stat-card,
     .track-hero {
-        padding: 20px;
-        border-radius: 20px;
+        padding: var(--s-4);
+        border-radius: var(--r-lg);
     }
 
     .track-hero__meta {
@@ -1322,7 +1356,7 @@ function parseUtcDateTime(value: string) {
     }
 
     .track-log__row {
-        padding: 16px 18px;
+        padding: var(--s-3);
     }
 }
 </style>

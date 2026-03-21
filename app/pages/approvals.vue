@@ -230,12 +230,6 @@ function statusClass(status?: number) {
     return "approval-badge--draft"
 }
 
-function rowStateClass(status?: number) {
-    if (status === 2) return "approval-row--approved"
-    if (status === 3) return "approval-row--rejected"
-    return ""
-}
-
 function isSelected(id: string) {
     return selectedIds.value.includes(id)
 }
@@ -401,7 +395,6 @@ onMounted(loadApprovals)
             <section class="card approvals-shell">
                 <header class="approvals-shell__header">
                     <div>
-                        <p class="approvals-shell__breadcrumb">Approvals <span>/</span> Pending Queue</p>
                         <h1 class="approvals-shell__title">Pending Queue</h1>
                         <p class="approvals-shell__subtitle">
                             Review submitted timesheets and approve or send them back with feedback.
@@ -472,7 +465,6 @@ onMounted(loadApprovals)
                         v-for="row in filteredApprovals"
                         :key="row.id"
                         class="approval-row"
-                        :class="rowStateClass(row.status)"
                     >
                         <div class="approval-grid approval-row__summary">
                             <label class="approval-list__check">
@@ -631,10 +623,10 @@ onMounted(loadApprovals)
 }
 
 .approvals-shell {
-    border-radius: 28px;
-    padding: var(--s-6);
+    border-radius: var(--r-lg);
+    padding: var(--s-5);
     display: grid;
-    gap: var(--s-5);
+    gap: var(--s-4);
 }
 
 .approvals-shell--loading {
@@ -646,41 +638,32 @@ onMounted(loadApprovals)
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: var(--s-5);
+    gap: var(--s-4);
     flex-wrap: wrap;
-}
-
-.approvals-shell__breadcrumb {
-    margin: 0 0 var(--s-2);
-    color: #98a2b3;
-    font-size: 0.95rem;
-}
-
-.approvals-shell__breadcrumb span {
-    margin: 0 8px;
 }
 
 .approvals-shell__title {
     margin: 0;
-    font-size: 2rem;
+    font-size: clamp(1.4rem, 3vw, 2rem);
     font-weight: 700;
 }
 
 .approvals-shell__subtitle {
-    margin: var(--s-2) 0 0;
+    margin: var(--s-1) 0 0;
     color: var(--text-2);
     max-width: 620px;
-    line-height: 1.5;
+    line-height: 1.4;
+    font-size: 0.9rem;
 }
 
 .approvals-shell__approve-all {
     min-width: 220px;
-    min-height: 50px;
+    min-height: 42px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 10px;
-    box-shadow: 0 18px 34px rgba(15, 118, 110, 0.18);
+    box-shadow: none;
 }
 
 .approvals-shell__approve-all:disabled {
@@ -701,24 +684,24 @@ onMounted(loadApprovals)
 }
 
 .approvals-filter__label {
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: #667085;
+    color: var(--text-2);
 }
 
 .approvals-filter select {
-    min-height: 50px;
+    min-height: 42px;
     padding: 0 14px;
-    background: #fff;
+    background: var(--surface);
 }
 
 .approval-list {
     border: 1px solid var(--border);
-    border-radius: 22px;
+    border-radius: var(--r-sm);
     overflow: hidden;
-    background: #fff;
+    background: var(--surface);
 }
 
 .approval-grid,
@@ -730,13 +713,13 @@ onMounted(loadApprovals)
 }
 
 .approval-list__head {
-    padding: 20px 24px;
-    background: #fbfcfe;
+    padding: var(--s-3) var(--s-4);
+    background: var(--surface-2);
     border-bottom: 1px solid var(--border);
     font-size: 0.78rem;
     font-weight: 700;
-    color: #667085;
-    letter-spacing: 0.08em;
+    color: var(--text-2);
+    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
@@ -763,16 +746,8 @@ onMounted(loadApprovals)
     border-bottom: 0;
 }
 
-.approval-row--approved {
-    background: linear-gradient(90deg, rgba(234, 248, 239, 0.52), rgba(255, 255, 255, 0));
-}
-
-.approval-row--rejected {
-    background: linear-gradient(90deg, rgba(253, 236, 236, 0.56), rgba(255, 255, 255, 0));
-}
-
 .approval-row__summary {
-    padding: 22px 24px;
+    padding: var(--s-3) var(--s-4);
 }
 
 .approval-person {
@@ -794,7 +769,7 @@ onMounted(loadApprovals)
 }
 
 .approval-person__name {
-    font-size: 1.2rem;
+    font-size: 1rem;
     font-weight: 700;
 }
 
@@ -802,19 +777,19 @@ onMounted(loadApprovals)
 .approval-activity {
     margin: 4px 0 0;
     color: var(--text-2);
-    font-size: 0.92rem;
+    font-size: 0.875rem;
 }
 
 .approval-period,
 .approval-hours {
-    font-size: 1rem;
-    color: #344054;
+    font-size: 0.95rem;
+    color: var(--text-1);
 }
 
 .approval-hours {
     font-weight: 700;
-    font-size: 1.15rem;
-    color: #101828;
+    font-size: 1rem;
+    color: var(--text-1);
 }
 
 .approval-badge {
@@ -824,7 +799,7 @@ onMounted(loadApprovals)
     min-width: 92px;
     padding: 7px 14px;
     border-radius: var(--r-pill);
-    font-size: 0.92rem;
+    font-size: 0.8rem;
     border: 1px solid transparent;
 }
 
@@ -946,29 +921,29 @@ onMounted(loadApprovals)
 
 .approval-detail-card {
     border: 1px solid var(--border);
-    border-radius: 18px;
+    border-radius: var(--r-sm);
     overflow: hidden;
-    background: #fff;
+    background: var(--surface);
 }
 
 .approval-detail-card__head,
 .approval-detail-card__row {
-    padding: 18px 20px;
+    padding: var(--s-3) var(--s-4);
 }
 
 .approval-detail-card__head {
-    background: #fbfcfe;
+    background: var(--surface-2);
     border-bottom: 1px solid var(--border);
     font-size: 0.78rem;
     font-weight: 700;
-    color: #98a2b3;
-    letter-spacing: 0.08em;
+    color: var(--text-2);
+    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
 .approval-detail-card__row {
     border-bottom: 1px solid var(--border);
-    color: #344054;
+    color: var(--text-1);
 }
 
 .approval-detail-card__row:last-child {
@@ -982,7 +957,7 @@ onMounted(loadApprovals)
 .approvals-empty {
     min-height: 260px;
     border: 1px dashed var(--border);
-    border-radius: 22px;
+    border-radius: var(--r-md);
     display: grid;
     place-items: center;
     text-align: center;
@@ -1012,7 +987,7 @@ onMounted(loadApprovals)
     justify-content: space-between;
     gap: var(--s-4);
     color: var(--text-2);
-    font-size: 0.98rem;
+    font-size: 0.9rem;
     flex-wrap: wrap;
 }
 

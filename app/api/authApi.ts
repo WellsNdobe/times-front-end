@@ -19,7 +19,7 @@ export type AuthResponse = {
     email: string
     token: string | null
 }
-
+//
 export const authApi = {
         login(payload: LoginRequest) {
             return apiClient<AuthResponse>("/auth/login", {

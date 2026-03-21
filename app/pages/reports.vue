@@ -762,8 +762,8 @@ function exportDetailedRows() {
 
 .reports__title {
     margin: 0;
-    font-size: clamp(1.8rem, 4vw, 2.35rem);
-    line-height: 1.05;
+    font-size: clamp(1.4rem, 3vw, 2rem);
+    line-height: 1.1;
 }
 
 .reports__subtitle {
@@ -844,7 +844,7 @@ function exportDetailedRows() {
 
 .reports__section-title {
     margin: 4px 0 0 0;
-    font-size: 1.4rem;
+    font-size: 1rem;
 }
 
 .reports__reset {
@@ -934,7 +934,7 @@ function exportDetailedRows() {
 
 .kpi-card__value {
     margin: var(--s-2) 0 var(--s-1) 0;
-    font-size: clamp(1.75rem, 2.8vw, 2.2rem);
+    font-size: clamp(1.2rem, 2.2vw, 1.85rem);
     font-weight: 800;
 }
 
@@ -1010,7 +1010,7 @@ function exportDetailedRows() {
 .report-panel__subtitle {
     margin: 0;
     color: var(--text-2);
-    font-size: 0.925rem;
+    font-size: 0.875rem;
 }
 
 .report-panel__legend {
@@ -1045,8 +1045,9 @@ function exportDetailedRows() {
 .trend-chart__bar-wrap {
     width: 100%;
     height: 220px;
-    border-radius: 14px;
-    background: linear-gradient(180deg, rgba(242, 244, 250, 0.7), var(--surface-2));
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
     display: flex;
     align-items: end;
     padding: 6px;
@@ -1055,8 +1056,8 @@ function exportDetailedRows() {
 
 .trend-chart__bar {
     width: 100%;
-    border-radius: 10px;
-    background: linear-gradient(180deg, rgba(15, 118, 110, 0.88), var(--primary));
+    border-radius: 8px;
+    background: var(--primary);
     min-height: 12px;
     transition: height 320ms ease;
 }
@@ -1087,8 +1088,9 @@ function exportDetailedRows() {
     justify-content: space-between;
     align-items: center;
     gap: var(--s-2);
-    padding: 14px 16px;
-    border-radius: 14px;
+    padding: var(--s-3);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
 }
 
 .status-list__item--success {
@@ -1139,7 +1141,7 @@ function exportDetailedRows() {
 }
 
 .status-list__metrics strong {
-    font-size: 1.05rem;
+    font-size: 0.95rem;
 }
 
 .status-list__metrics span {
