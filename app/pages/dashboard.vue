@@ -90,22 +90,30 @@ const statusSummaryPill = computed(() => {
     return "In progress"
 })
 const statusToneClass = computed(() => {
-    if (!statusSummary.value.total) return "kpi__pill--neutral"
-    if (statusSummary.value.submitted === statusSummary.value.total) return "kpi__pill--success"
-    if (statusSummary.value.rejected > 0) return "kpi__pill--warning"
-    return "kpi__pill--info"
+    if (!statusSummary.value.total) return "kpi-badge--neutral"
+    if (statusSummary.value.submitted === statusSummary.value.total) return "kpi-badge--success"
+    if (statusSummary.value.rejected > 0) return "kpi-badge--warning"
+    return "kpi-badge--info"
 })
 
 const weekMinutes = computed(() =>
     orgEntries.value.reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
 )
 const weekHours = computed(() => (weekMinutes.value / 60).toFixed(1))
+const activeProjectsCount = computed(
+    () => projects.value.filter((project) => project.isActive !== false).length
+)
+const teamSize = computed(() => members.value.filter((m) => m.isActive).length)
 const weekTargetHours = computed(() => teamSize.value * 40)
 const weekProgressPercent = computed(() =>
     weekTargetHours.value > 0
         ? Math.min(100, Math.round((Number(weekHours.value) / weekTargetHours.value) * 100))
         : 0
 )
+const avgHoursPerMember = computed(() => {
+    if (!teamSize.value) return "0.0"
+    return (Number(weekHours.value) / teamSize.value).toFixed(1)
+})
 const todayMinutes = computed(() =>
     orgEntries.value
         .filter((entry) => entry.workDate === today)
@@ -114,10 +122,6 @@ const todayMinutes = computed(() =>
 const todayEntriesCount = computed(
     () => orgEntries.value.filter((entry) => entry.workDate === today).length
 )
-const activeProjectsCount = computed(
-    () => projects.value.filter((project) => project.isActive !== false).length
-)
-const teamSize = computed(() => members.value.filter((m) => m.isActive).length)
 
 const projectNameById = computed(() => {
     const map = new Map<string, string>()
@@ -128,6 +132,10 @@ const clientNameById = computed(() => {
     const map = new Map<string, string>()
     for (const client of clients.value) map.set(client.id, client.name ?? "Unnamed client")
     return map
+})
+const selectedClientName = computed(() => {
+    if (!selectedClientFilter.value) return ""
+    return clientNameById.value.get(selectedClientFilter.value) ?? ""
 })
 
 const hoursByProject = computed(() => {
@@ -200,6 +208,45 @@ const weekTrend = computed(() => {
     return days.map((day) => ({
         ...day,
         height: max ? Math.max(8, Math.round((day.totalMinutes / max) * 100)) : 8,
+    }))
+})
+
+const dashboardStatusSummary = computed(() => {
+    const total = statusSummary.value.total
+    const items = [
+        {
+            key: "approved",
+            label: "Approved",
+            count: statusSummary.value.approved,
+            icon: "mdi:check-circle",
+            tone: "success",
+        },
+        {
+            key: "submitted",
+            label: "Submitted",
+            count: statusSummary.value.submitted,
+            icon: "mdi:progress-clock",
+            tone: "warning",
+        },
+        {
+            key: "draft",
+            label: "Draft",
+            count: statusSummary.value.draft,
+            icon: "mdi:file-document-edit-outline",
+            tone: "neutral",
+        },
+        {
+            key: "rejected",
+            label: "Rejected",
+            count: statusSummary.value.rejected,
+            icon: "mdi:close-circle",
+            tone: "danger",
+        },
+    ]
+
+    return items.map((item) => ({
+        ...item,
+        percent: total ? Math.round((item.count / total) * 100) : 0,
     }))
 })
 
@@ -309,27 +356,48 @@ function toggleClientFilter(clientId: string) {
     <section class="dashboard">
         <header class="dash-hero card">
             <div class="dash-hero__left">
-                <p class="dash-hero__eyebrow">Workload pulse</p>
+                <p class="dash-hero__eyebrow">Executive dashboard</p>
                 <h1 class="dash-hero__title">Welcome back, {{ userDisplayName }}</h1>
-                <p class="dash-hero__subtitle">{{ org?.name }} | {{ weekLabel }}</p>
+                <p class="dash-hero__subtitle">
+                    Real-time visibility into team workload, approvals, and project delivery for
+                    {{ org?.name }}.
+                </p>
+                <div class="dash-hero__meta">
+                    <span class="dash-hero__range-pill">
+                        <Icon name="mdi:calendar-range" size="16" />
+                        {{ weekLabel }}
+                    </span>
+                    <span class="dash-hero__meta-text">
+                        {{ teamSize }} active team members • {{ activeProjectsCount }} active projects
+                    </span>
+                </div>
                 <div class="dash-hero__week-controls">
-                    <button type="button" class="btn btn-secondary btn-sm" @click="shiftWeek(-1)">
+                    <button type="button" class="btn btn-secondary btn-sm btn-inline" @click="shiftWeek(-1)">
+                        <Icon name="mdi:chevron-left" size="18" />
                         Previous week
                     </button>
                     <button
                         type="button"
-                        class="btn btn-secondary btn-sm"
+                        class="btn btn-secondary btn-sm btn-inline"
                         :disabled="isCurrentWeek"
                         @click="goToThisWeek"
                     >
+                        <Icon name="mdi:calendar-today-outline" size="18" />
                         This week
                     </button>
                 </div>
             </div>
             <div class="dash-hero__right">
-                <NuxtLink to="/track" class="btn btn-primary">Track time</NuxtLink>
-                <NuxtLink to="/timesheets" class="btn btn-secondary">Open timesheet</NuxtLink>
-                <NuxtLink v-if="isManagerOrAdmin" to="/approvals" class="btn btn-secondary">
+                <NuxtLink to="/track" class="btn btn-primary btn-inline">
+                    <Icon name="mdi:plus" size="18" />
+                    Track time
+                </NuxtLink>
+                <NuxtLink to="/timesheets" class="btn btn-secondary btn-inline">
+                    <Icon name="mdi:calendar-text-outline" size="18" />
+                    Open timesheet
+                </NuxtLink>
+                <NuxtLink v-if="isManagerOrAdmin" to="/approvals" class="btn btn-secondary btn-inline">
+                    <Icon name="mdi:clipboard-check-outline" size="18" />
                     Review approvals
                 </NuxtLink>
             </div>
@@ -347,128 +415,200 @@ function toggleClientFilter(clientId: string) {
         </template>
 
         <template v-else>
-            <section class="dash-grid">
-                <article class="card kpi kpi--primary">
-                    <p class="kpi__label">Hours This Week</p>
-                    <p class="kpi__value">{{ weekHours }}h</p>
-                    <div class="kpi__progress">
-                        <div class="kpi__progress-fill" :style="{ width: `${weekProgressPercent}%` }"></div>
+            <section class="dashboard-kpis">
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Hours this week</p>
+                        <p class="kpi-card__value">{{ weekHours }}h</p>
+                        <p class="kpi-card__meta">
+                            {{ weekProgressPercent }}% of the {{ weekTargetHours }}h weekly capacity target
+                        </p>
+                        <div class="kpi-progress">
+                            <div class="kpi-progress__fill" :style="{ width: `${weekProgressPercent}%` }"></div>
+                        </div>
                     </div>
-                    <p class="kpi__meta">{{ weekProgressPercent }}% of {{ weekTargetHours }}h target</p>
+                    <span class="kpi-card__icon kpi-card__icon--primary">
+                        <Icon name="mdi:clock-outline" size="24" />
+                    </span>
                 </article>
 
-                <article class="card kpi">
-                    <p class="kpi__label">Timesheets Submitted</p>
-                    <p class="kpi__value">{{ statusSummaryLabel }}</p>
-                    <p class="kpi__meta">{{ statusSummaryMeta }}</p>
-                    <span class="kpi__pill" :class="statusToneClass">{{ statusSummaryPill }}</span>
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Timesheet coverage</p>
+                        <p class="kpi-card__value">{{ statusSummaryLabel }}</p>
+                        <p class="kpi-card__meta">{{ statusSummaryMeta }}</p>
+                        <span class="kpi-badge" :class="statusToneClass">{{ statusSummaryPill }}</span>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--info">
+                        <Icon name="mdi:file-document-check-outline" size="24" />
+                    </span>
                 </article>
 
-                <article class="card kpi">
-                    <p class="kpi__label">Today</p>
-                    <p class="kpi__value">{{ formatMinutes(todayMinutes) }}</p>
-                    <p class="kpi__meta">{{ todayEntriesCount }} entries logged</p>
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Today's activity</p>
+                        <p class="kpi-card__value">{{ formatMinutes(todayMinutes) }}</p>
+                        <p class="kpi-card__meta">
+                            {{ todayEntriesCount }} entries logged today • {{ avgHoursPerMember }}h average per active member
+                        </p>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--accent">
+                        <Icon name="mdi:chart-timeline-variant" size="24" />
+                    </span>
                 </article>
 
-                <article class="card kpi">
-                    <p class="kpi__label">Workspace</p>
-                    <p class="kpi__value">{{ activeProjectsCount }} active projects</p>
-                    <p class="kpi__meta">{{ clients.length }} clients | {{ teamSize }} team members</p>
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Workspace footprint</p>
+                        <p class="kpi-card__value">{{ activeProjectsCount }}</p>
+                        <p class="kpi-card__meta">{{ clients.length }} clients • {{ teamSize }} active team members</p>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--neutral">
+                        <Icon name="mdi:briefcase-outline" size="24" />
+                    </span>
                 </article>
 
-                <article v-if="isManagerOrAdmin" class="card kpi kpi--accent">
-                    <p class="kpi__label">Pending Approvals</p>
-                    <p class="kpi__value">{{ pendingApprovalCount }}</p>
-                    <p class="kpi__meta">Timesheets awaiting action</p>
+                <article v-if="isManagerOrAdmin" class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Pending approvals</p>
+                        <p class="kpi-card__value">{{ pendingApprovalCount }}</p>
+                        <p class="kpi-card__meta">Timesheets currently waiting for manager action</p>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--success">
+                        <Icon name="mdi:clipboard-check-outline" size="24" />
+                    </span>
                 </article>
             </section>
 
-            <section class="dash-charts">
-                <article class="card panel">
-                    <header class="panel__head">
-                        <h2 class="panel__title">Week Trend</h2>
-                        <p class="panel__subtitle">Hours logged per day</p>
+            <section class="dashboard-content">
+                <article class="card report-panel report-panel--trend">
+                    <header class="report-panel__head report-panel__head--spread">
+                        <div>
+                            <p class="dashboard-section-label">Trend</p>
+                            <h2 class="dashboard-section-title">Weekly hour trend</h2>
+                            <p class="report-panel__subtitle">
+                                Daily logged time for the selected week, modeled after the reports view.
+                            </p>
+                        </div>
+                        <div class="report-panel__legend">
+                            <span class="report-panel__legend-dot"></span>
+                            Logged time
+                        </div>
                     </header>
-                    <div class="trend">
-                        <div v-for="day in weekTrend" :key="day.date" class="trend__col">
-                            <div class="trend__bar-wrap">
+                    <div class="trend-chart trend-chart--daily">
+                        <div v-for="day in weekTrend" :key="day.date" class="trend-chart__item">
+                            <p class="trend-chart__value">{{ formatMinutes(day.totalMinutes) }}</p>
+                            <div class="trend-chart__bar-wrap">
                                 <div
-                                    class="trend__bar"
+                                    class="trend-chart__bar"
                                     :style="{
                                         height: `${day.height}%`,
                                         animationDelay: `${(new Date(day.date).getDay() + 1) * 40}ms`,
                                     }"
                                 ></div>
                             </div>
-                            <p class="trend__value">{{ formatMinutes(day.totalMinutes) }}</p>
-                            <p class="trend__label">{{ day.label }}</p>
+                            <p class="trend-chart__label">{{ day.label }}</p>
                         </div>
                     </div>
                 </article>
 
-                <article class="card panel">
-                    <header class="panel__head">
-                        <h2 class="panel__title">Project Mix</h2>
-                        <p class="panel__subtitle">
-                            {{
-                                selectedClientFilter
-                                    ? "Filtered by selected client"
-                                    : "Where time is going this week"
-                            }}
+                <article class="card report-panel report-panel--status">
+                    <header class="report-panel__head">
+                        <p class="dashboard-section-label">Statuses</p>
+                        <h2 class="dashboard-section-title">Timesheet status summary</h2>
+                        <p class="report-panel__subtitle">
+                            Current state of all timesheets inside the selected week.
+                        </p>
+                    </header>
+                    <div class="status-list">
+                        <div
+                            v-for="item in dashboardStatusSummary"
+                            :key="item.key"
+                            class="status-list__item"
+                            :class="`status-list__item--${item.tone}`"
+                        >
+                            <div class="status-list__label-wrap">
+                                <span class="status-list__icon">
+                                    <Icon :name="item.icon" size="18" />
+                                </span>
+                                <span class="status-list__label">{{ item.label }}</span>
+                            </div>
+                            <div class="status-list__metrics">
+                                <strong>{{ item.count }}</strong>
+                                <span>{{ item.percent }}%</span>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="card report-panel">
+                    <header class="report-panel__head">
+                        <p class="dashboard-section-label">Projects</p>
+                        <h2 class="dashboard-section-title">Hours by project</h2>
+                        <p class="report-panel__subtitle">
+                            Top project allocation for this week, with quick links into tracking.
                         </p>
                     </header>
                     <ul v-if="hoursByProject.length" class="rank-list">
-                        <NuxtLink
-                            v-for="item in hoursByProject"
-                            :key="item.projectId"
-                            class="rank-list__item rank-list__item--link"
-                            :to="{
-                                path: '/track',
-                                query: {
-                                    projectId: item.projectId,
-                                    date: weekStartDate,
-                                },
-                            }"
-                        >
+                        <li v-for="item in hoursByProject" :key="item.projectId" class="rank-list__item">
                             <div class="rank-list__row">
                                 <span class="rank-list__name">{{ item.label }}</span>
-                                <span class="rank-list__time">{{ formatMinutes(item.totalMinutes) }}</span>
+                                <strong class="rank-list__value">{{ formatMinutes(item.totalMinutes) }}</strong>
                             </div>
                             <div class="rank-list__track">
                                 <div class="rank-list__fill" :style="{ width: `${item.percent}%` }"></div>
                             </div>
-                        </NuxtLink>
+                            <NuxtLink
+                                class="rank-list__cta"
+                                :to="{
+                                    path: '/track',
+                                    query: {
+                                        projectId: item.projectId,
+                                        date: weekStartDate,
+                                    },
+                                }"
+                            >
+                                Open in track
+                            </NuxtLink>
+                        </li>
                     </ul>
                     <p v-else class="muted">No project activity this week.</p>
                 </article>
 
-                <article class="card panel">
-                    <header class="panel__head">
-                        <h2 class="panel__title">Client Mix</h2>
-                        <p class="panel__subtitle">Client-level distribution</p>
+                <article class="card report-panel">
+                    <header class="report-panel__head">
+                        <p class="dashboard-section-label">Clients</p>
+                        <h2 class="dashboard-section-title">Hours by client</h2>
+                        <p class="report-panel__subtitle">
+                            Click a client to focus the project list on that account.
+                        </p>
                     </header>
                     <ul v-if="hoursByClient.length" class="rank-list">
-                        <button
+                        <li
                             v-for="item in hoursByClient"
                             :key="item.clientId"
-                            type="button"
-                            class="rank-list__item rank-list__item--button"
-                            :class="{
-                                'rank-list__item--active':
-                                    selectedClientFilter === item.clientId,
-                            }"
-                            @click="toggleClientFilter(item.clientId)"
+                            class="rank-list__item rank-list__item--interactive"
+                            :class="{ 'rank-list__item--active': selectedClientFilter === item.clientId }"
                         >
-                            <div class="rank-list__row">
-                                <span class="rank-list__name">{{ item.label }}</span>
-                                <span class="rank-list__time">{{ formatMinutes(item.totalMinutes) }}</span>
-                            </div>
-                            <div class="rank-list__track rank-list__track--client">
-                                <div class="rank-list__fill rank-list__fill--client" :style="{ width: `${item.percent}%` }"></div>
-                            </div>
-                        </button>
+                            <button type="button" class="rank-list__button" @click="toggleClientFilter(item.clientId)">
+                                <div class="rank-list__row">
+                                    <span class="rank-list__name">{{ item.label }}</span>
+                                    <strong class="rank-list__value">{{ formatMinutes(item.totalMinutes) }}</strong>
+                                </div>
+                                <div class="rank-list__track">
+                                    <div class="rank-list__fill rank-list__fill--client" :style="{ width: `${item.percent}%` }"></div>
+                                </div>
+                            </button>
+                        </li>
                     </ul>
                     <p v-else class="muted">No client-linked activity this week.</p>
+                    <p class="report-panel__helper" :class="{ 'report-panel__helper--active': Boolean(selectedClientFilter) }">
+                        {{
+                            selectedClientFilter
+                                ? `Project list filtered to ${selectedClientName || 'the selected client'}.`
+                                : 'Showing all clients.'
+                        }}
+                    </p>
                 </article>
             </section>
         </template>
@@ -485,14 +625,20 @@ function toggleClientFilter(clientId: string) {
     padding: var(--s-5);
     display: flex;
     justify-content: space-between;
-    align-items: flex-end;
+    align-items: flex-start;
     gap: var(--s-4);
     background: var(--surface);
 }
 
-.dash-hero__eyebrow {
-    margin: 0 0 var(--s-1) 0;
-    font-size: 0.75rem;
+.dash-hero__left {
+    display: grid;
+    gap: var(--s-2);
+}
+
+.dash-hero__eyebrow,
+.dashboard-section-label {
+    margin: 0;
+    font-size: 0.78rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-3);
@@ -501,25 +647,52 @@ function toggleClientFilter(clientId: string) {
 
 .dash-hero__title {
     margin: 0;
-    font-size: clamp(1.4rem, 3vw, 2rem);
+    font-size: clamp(1.5rem, 3vw, 2.2rem);
+    line-height: 1.1;
 }
 
-.dash-hero__subtitle {
-    margin: var(--s-1) 0 0 0;
+.dash-hero__subtitle,
+.dash-hero__meta-text,
+.kpi-card__meta,
+.report-panel__subtitle,
+.report-panel__helper,
+.muted {
+    margin: 0;
     color: var(--text-2);
 }
 
-.dash-hero__week-controls {
-    margin-top: var(--s-3);
+.dash-hero__meta {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+    align-items: center;
 }
 
+.dash-hero__range-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: var(--r-pill);
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-size: 0.875rem;
+    font-weight: 700;
+}
+
+.dash-hero__week-controls,
 .dash-hero__right {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+}
+
+.dash-hero__week-controls {
+    margin-top: var(--s-1);
+}
+
+.dash-hero__right {
+    justify-content: flex-end;
 }
 
 .btn-sm {
@@ -527,64 +700,101 @@ function toggleClientFilter(clientId: string) {
     font-size: 0.875rem;
 }
 
-.dash-grid {
+.btn-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.dashboard-kpis,
+.dashboard-content {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: var(--s-3);
 }
 
-.kpi {
-    padding: var(--s-4);
+.kpi-card {
     grid-column: span 3;
+    padding: var(--s-4);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s-3);
+    align-items: flex-start;
 }
 
-.kpi--primary {
-    grid-column: span 6;
-    border-left: 4px solid var(--primary);
-}
-
-.kpi--accent {
-    border-left: 4px solid var(--accent);
-}
-
-.kpi__label {
+.kpi-card__label {
     margin: 0;
     color: var(--text-2);
-    font-size: 0.8rem;
+    font-size: 0.82rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     font-weight: 700;
 }
 
-.kpi__value {
+.kpi-card__value {
     margin: var(--s-2) 0 var(--s-1) 0;
-    font-size: clamp(1.2rem, 2.2vw, 1.85rem);
+    font-size: clamp(1.2rem, 2.2vw, 1.9rem);
     font-weight: 800;
 }
 
-.kpi__meta {
-    margin: 0;
-    color: var(--text-2);
+.kpi-card__meta {
     font-size: 0.9rem;
+    line-height: 1.45;
 }
 
-.kpi__progress {
+.kpi-card__icon {
+    width: 58px;
+    height: 58px;
+    border-radius: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.kpi-card__icon--primary {
+    background: var(--primary-soft);
+    color: var(--primary);
+}
+
+.kpi-card__icon--info {
+    background: var(--info-soft);
+    color: var(--info);
+}
+
+.kpi-card__icon--accent {
+    background: var(--accent-soft);
+    color: #b6671e;
+}
+
+.kpi-card__icon--neutral {
+    background: var(--surface-2);
+    color: var(--text-2);
+}
+
+.kpi-card__icon--success {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.kpi-progress {
     width: 100%;
     height: 10px;
     border-radius: var(--r-pill);
     background: var(--surface-2);
     overflow: hidden;
-    margin: var(--s-2) 0;
+    margin-top: var(--s-3);
 }
 
-.kpi__progress-fill {
+.kpi-progress__fill {
     height: 100%;
     background: var(--primary);
     transition: width 500ms ease;
 }
 
-.kpi__pill {
-    display: inline-block;
+.kpi-badge {
+    display: inline-flex;
+    align-items: center;
     margin-top: var(--s-2);
     border-radius: var(--r-pill);
     padding: 4px 10px;
@@ -592,102 +802,208 @@ function toggleClientFilter(clientId: string) {
     font-weight: 700;
 }
 
-.kpi__pill--neutral {
+.kpi-badge--neutral {
     background: var(--surface-2);
     color: var(--text-2);
 }
 
-.kpi__pill--info {
+.kpi-badge--info {
     background: var(--info-soft);
     color: var(--info);
 }
 
-.kpi__pill--success {
+.kpi-badge--success {
     background: var(--success-soft);
     color: var(--success);
 }
 
-.kpi__pill--warning {
+.kpi-badge--warning {
     background: var(--warning-soft);
     color: var(--warning);
 }
 
-.dash-charts {
+.report-panel {
+    grid-column: span 4;
+    padding: var(--s-4);
     display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: var(--s-3);
 }
 
-.panel {
-    padding: var(--s-4);
+.report-panel--trend {
+    grid-column: span 8;
 }
 
-.dash-charts > .panel:nth-child(1) {
-    grid-column: span 6;
+.report-panel--status {
+    grid-column: span 4;
 }
 
-.dash-charts > .panel:nth-child(2),
-.dash-charts > .panel:nth-child(3) {
-    grid-column: span 3;
-}
-
-.panel__head {
-    margin-bottom: var(--s-3);
-}
-
-.panel__title {
-    margin: 0;
+.dashboard-section-title {
+    margin: 4px 0 0 0;
     font-size: 1rem;
 }
 
-.panel__subtitle {
-    margin: var(--s-1) 0 0 0;
-    color: var(--text-2);
+.report-panel__head {
+    display: grid;
+    gap: 4px;
+}
+
+.report-panel__head--spread {
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    gap: var(--s-3);
+}
+
+.report-panel__subtitle {
     font-size: 0.875rem;
 }
 
-.trend {
+.report-panel__helper {
+    font-size: 0.875rem;
+}
+
+.report-panel__helper--active {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.report-panel__legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-2);
+    font-size: 0.95rem;
+}
+
+.report-panel__legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.trend-chart {
+    min-height: 320px;
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap: var(--s-2);
+    grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
     align-items: end;
-    min-height: 210px;
+    gap: var(--s-2);
 }
 
-.trend__col {
+.trend-chart--daily {
+    min-height: 280px;
+}
+
+.trend-chart__item {
     display: grid;
+    gap: 8px;
     justify-items: center;
-    gap: 6px;
 }
 
-.trend__bar-wrap {
+.trend-chart__bar-wrap {
     width: 100%;
-    height: 130px;
+    height: 210px;
     border-radius: var(--r-sm);
+    border: 1px solid var(--border);
     background: var(--surface-2);
     display: flex;
     align-items: end;
-    padding: 4px;
+    padding: 6px;
+    overflow: hidden;
 }
 
-.trend__bar {
+.trend-chart__bar {
     width: 100%;
+    min-height: 12px;
     border-radius: 8px;
     background: var(--primary);
     transform-origin: bottom;
     animation: bar-rise 420ms ease both;
 }
 
-.trend__value {
+.trend-chart__value,
+.trend-chart__label {
     margin: 0;
-    font-size: 0.75rem;
-    color: var(--text-2);
+    text-align: center;
 }
 
-.trend__label {
-    margin: 0;
-    font-size: 0.75rem;
+.trend-chart__value {
+    font-size: 0.78rem;
+}
+
+.trend-chart__label {
+    font-size: 0.78rem;
     font-weight: 700;
+}
+
+.status-list {
+    display: grid;
+    gap: var(--s-2);
+}
+
+.status-list__item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-3);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+}
+
+.status-list__item--success {
+    background: var(--success-soft);
+    color: #14532d;
+}
+
+.status-list__item--warning {
+    background: var(--warning-soft);
+    color: #7c2d12;
+}
+
+.status-list__item--neutral {
+    background: var(--surface-2);
+    color: var(--text-1);
+}
+
+.status-list__item--danger {
+    background: var(--danger-soft);
+    color: #7f1d1d;
+}
+
+.status-list__label-wrap,
+.status-list__metrics {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.status-list__icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.status-list__label {
+    font-weight: 700;
+}
+
+.status-list__metrics {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+}
+
+.status-list__metrics strong {
+    font-size: 0.95rem;
+}
+
+.status-list__metrics span {
+    font-size: 0.85rem;
+    opacity: 0.8;
 }
 
 .rank-list {
@@ -699,27 +1015,15 @@ function toggleClientFilter(clientId: string) {
 }
 
 .rank-list__item {
-    display: block;
-    width: 100%;
+    display: grid;
+    gap: 8px;
+}
+
+.rank-list__item--interactive {
     border: 1px solid var(--border);
     border-radius: var(--r-sm);
     background: var(--surface);
-    padding: var(--s-2);
-}
-
-.rank-list__item--link {
-    color: inherit;
-    text-decoration: none;
-}
-
-.rank-list__item--button {
-    text-align: left;
-    cursor: pointer;
-}
-
-.rank-list__item--button:hover,
-.rank-list__item--link:hover {
-    background: var(--surface-2);
+    padding: 4px;
 }
 
 .rank-list__item--active {
@@ -727,21 +1031,30 @@ function toggleClientFilter(clientId: string) {
     box-shadow: inset 0 0 0 1px var(--primary);
 }
 
+.rank-list__button {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: var(--s-2);
+    display: grid;
+    gap: 8px;
+    text-align: left;
+    cursor: pointer;
+}
+
 .rank-list__row {
     display: flex;
     justify-content: space-between;
     gap: var(--s-2);
-    margin-bottom: 6px;
+    align-items: center;
 }
 
 .rank-list__name {
-    font-size: 0.875rem;
     font-weight: 600;
 }
 
-.rank-list__time {
-    font-size: 0.8rem;
-    color: var(--text-2);
+.rank-list__value {
+    font-size: 0.95rem;
 }
 
 .rank-list__track {
@@ -754,22 +1067,29 @@ function toggleClientFilter(clientId: string) {
 
 .rank-list__fill {
     height: 100%;
+    border-radius: var(--r-pill);
     background: var(--primary);
     transform-origin: left;
     animation: bar-fill 600ms ease both;
 }
 
-.rank-list__track--client .rank-list__fill--client {
+.rank-list__fill--client {
     background: var(--accent);
+}
+
+.rank-list__cta {
+    color: var(--primary);
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.rank-list__cta:hover {
+    text-decoration: underline;
 }
 
 .dash-loading {
     padding: var(--s-5);
-}
-
-.muted {
-    margin: 0;
-    color: var(--text-2);
 }
 
 @keyframes bar-rise {
@@ -795,11 +1115,13 @@ function toggleClientFilter(clientId: string) {
 }
 
 @media (max-width: 1100px) {
-    .kpi,
-    .kpi--primary,
-    .dash-charts > .panel:nth-child(1),
-    .dash-charts > .panel:nth-child(2),
-    .dash-charts > .panel:nth-child(3) {
+    .kpi-card {
+        grid-column: span 6;
+    }
+
+    .report-panel--trend,
+    .report-panel--status,
+    .report-panel {
         grid-column: span 12;
     }
 }
@@ -811,12 +1133,37 @@ function toggleClientFilter(clientId: string) {
         padding: var(--s-4);
     }
 
-    .trend {
-        min-height: 170px;
+    .dash-hero__right {
+        justify-content: flex-start;
     }
 
-    .trend__bar-wrap {
-        height: 95px;
+    .dashboard-kpis,
+    .dashboard-content {
+        grid-template-columns: 1fr;
+    }
+
+    .kpi-card,
+    .report-panel,
+    .report-panel--trend,
+    .report-panel--status {
+        grid-column: auto;
+    }
+
+    .report-panel__head--spread {
+        grid-template-columns: 1fr;
+    }
+
+    .trend-chart {
+        grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+        min-height: 250px;
+    }
+
+    .trend-chart__bar-wrap {
+        height: 160px;
+    }
+
+    .status-list__item {
+        align-items: flex-start;
     }
 }
 </style>
