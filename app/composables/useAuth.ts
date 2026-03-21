@@ -105,34 +105,6 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
     }
 }
 
-function getLandingPath(token: string) {
-    const roles = getRolesFromToken(token)
-    const isEmployeeOnly = roles.length > 0 && roles.every((role) => role === "employee")
-    return isEmployeeOnly ? "/timesheets" : "/dashboard"
-}
-
-function getRolesFromToken(token: string | null | undefined) {
-    if (!token) return []
-    const payload = decodeJwtPayload(token)
-    if (!payload || typeof payload !== "object") return []
-    const claimKey = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
-    const rawRoles = [payload[claimKey], payload.role, payload.roles]
-    return rawRoles
-        .flatMap((role) => normalizeRoles(role))
-        .map((role) => role.toLowerCase())
-        .filter(Boolean)
-}
-
-function normalizeRoles(value: unknown): string[] {
-    if (!value) return []
-    if (Array.isArray(value)) {
-        return value.filter((entry): entry is string => typeof entry === "string")
-    }
-    if (typeof value === "string") {
-        return value
-            .split(",")
-            .map((entry) => entry.trim())
-            .filter(Boolean)
-    }
-    return []
+function getLandingPath(_token: string) {
+    return "/dashboard"
 }

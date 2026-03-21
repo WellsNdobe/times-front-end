@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ middleware: ["auth", "manager-only"] })
+definePageMeta({ middleware: ["auth"] })
 
 import { computed, onMounted, ref, watch } from "vue"
 import { useAuth } from "~/composables/useAuth"
@@ -10,15 +10,15 @@ import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
 import { timesheetEntriesApi, type TimesheetEntry } from "~/api/timesheetEntriesApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
-const { user } = useAuth()
+const WEEKLY_TARGET_HOURS = 40
+const RECENT_ENTRY_LIMIT = 3
+
+const { token, user } = useAuth()
 
 const org = ref<Organization | null>(null)
 const members = ref<OrganizationMember[]>([])
 const projects = ref<Project[]>([])
 const clients = ref<Client[]>([])
-const orgTimesheets = ref<Timesheet[]>([])
-const orgEntries = ref<TimesheetEntry[]>([])
-const pendingApprovalCount = ref(0)
 
 const loading = ref(true)
 const error = ref<UiError | null>(null)
@@ -26,12 +26,24 @@ const error = ref<UiError | null>(null)
 const currentWeekStart = computed(() => formatDateForInput(getWeekStart(new Date())))
 const weekStartDate = ref(currentWeekStart.value)
 const today = formatDateForInput(new Date())
-const selectedClientFilter = ref<string | null>(null)
 
+const myWeekTimesheet = ref<Timesheet | null>(null)
+const myWeekEntries = ref<TimesheetEntry[]>([])
+const myRecentTimesheets = ref<Timesheet[]>([])
+const myRecentEntries = ref<TimesheetEntry[]>([])
+const previousWeekTimesheet = ref<Timesheet | null>(null)
+const previousWeekEntries = ref<TimesheetEntry[]>([])
+
+const orgTimesheets = ref<Timesheet[]>([])
+const orgEntries = ref<TimesheetEntry[]>([])
+const pendingApprovalCount = ref(0)
+
+const roles = computed(() => getRolesFromToken(token.value))
+const isEmployeeOnly = computed(() => roles.value.length > 0 && roles.value.every((role) => role === "employee"))
+const previousWeekStart = computed(() => formatDateForInput(addDays(new Date(weekStartDate.value), -7)))
 const weekLabel = computed(() => {
     const start = new Date(weekStartDate.value)
-    const end = new Date(start)
-    end.setDate(start.getDate() + 6)
+    const end = addDays(start, 6)
     return `${formatShortDate(start)} - ${formatShortDate(end)}`
 })
 const isCurrentWeek = computed(() => weekStartDate.value === currentWeekStart.value)
@@ -41,18 +53,142 @@ const myMember = computed(() => {
     return members.value.find((member) => member.userId === user.value?.userId) ?? null
 })
 const userDisplayName = computed(() => {
-    const fullName = [myMember.value?.firstName, myMember.value?.lastName]
-        .filter(Boolean)
-        .join(" ")
-        .trim()
+    const fullName = [myMember.value?.firstName, myMember.value?.lastName].filter(Boolean).join(" ").trim()
     if (fullName) return fullName
     const email = user.value?.email ?? ""
     if (email.includes("@")) return email.split("@")[0]
     return "there"
 })
+const firstName = computed(() => userDisplayName.value.split(" ")[0] || userDisplayName.value)
 const isManagerOrAdmin = computed(() => {
     const role = myMember.value?.role
     return role === 0 || role === 1
+})
+
+const projectNameById = computed(() => {
+    const map = new Map<string, string>()
+    for (const project of projects.value) map.set(project.id, project.name ?? "Unnamed project")
+    return map
+})
+const projectClientIdById = computed(() => {
+    const map = new Map<string, string>()
+    for (const project of projects.value) {
+        if (project.clientId) map.set(project.id, project.clientId)
+    }
+    return map
+})
+const clientNameById = computed(() => {
+    const map = new Map<string, string>()
+    for (const client of clients.value) map.set(client.id, client.name ?? "Unnamed client")
+    return map
+})
+
+const employeeWeekMinutes = computed(() =>
+    myWeekEntries.value.reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
+)
+const employeeWeekHours = computed(() => (employeeWeekMinutes.value / 60).toFixed(1))
+const employeeWeekProgress = computed(() =>
+    Math.min(100, Math.round((Number(employeeWeekHours.value) / WEEKLY_TARGET_HOURS) * 100))
+)
+const employeeTopProjectSummary = computed(() => {
+    const totals = new Map<string, number>()
+    for (const entry of myWeekEntries.value) {
+        totals.set(entry.projectId, (totals.get(entry.projectId) ?? 0) + (entry.durationMinutes ?? 0))
+    }
+    const [projectId] = [...totals.entries()].sort((a, b) => b[1] - a[1])[0] ?? []
+    if (!projectId) return "You have not logged any project time yet this week."
+    const projectName = projectNameById.value.get(projectId) ?? "your top project"
+    const clientId = projectClientIdById.value.get(projectId)
+    const clientName = clientId ? clientNameById.value.get(clientId) : null
+    return clientName
+        ? `Most of your time was logged under Client: ${clientName}.`
+        : `Most of your time was logged under ${projectName}.`
+})
+const employeeDailyOverview = computed(() => {
+    const totalsByDate = new Map<string, number>()
+    for (const entry of myWeekEntries.value) {
+        totalsByDate.set(entry.workDate, (totalsByDate.get(entry.workDate) ?? 0) + (entry.durationMinutes ?? 0))
+    }
+
+    return Array.from({ length: 7 }, (_, index) => {
+        const date = addDays(new Date(weekStartDate.value), index)
+        const key = formatDateForInput(date)
+        const totalMinutes = totalsByDate.get(key) ?? 0
+        return {
+            key,
+            shortDay: date.toLocaleDateString(undefined, { weekday: "short" }).toUpperCase(),
+            dayOfMonth: date.getDate(),
+            totalMinutes,
+            isToday: key === today,
+            isWeekend: [0, 6].includes(date.getDay()),
+        }
+    })
+})
+const highlightedDayKey = computed(() => {
+    const todayCard = employeeDailyOverview.value.find((day) => day.isToday)
+    if (todayCard) return todayCard.key
+    return employeeDailyOverview.value.reduce((best, day) =>
+        day.totalMinutes > best.totalMinutes ? day : best
+    ).key
+})
+const recentEntryRows = computed(() => {
+    const timesheetStatusById = new Map(myRecentTimesheets.value.map((sheet) => [sheet.id, sheet.status]))
+    return [...myRecentEntries.value]
+        .sort(sortEntriesByMostRecent)
+        .slice(0, RECENT_ENTRY_LIMIT)
+        .map((entry) => {
+            const projectName = projectNameById.value.get(entry.projectId) ?? "Untitled project"
+            const clientId = projectClientIdById.value.get(entry.projectId)
+            const clientName = clientId ? clientNameById.value.get(clientId) : null
+            const status = getTimesheetStatusMeta(timesheetStatusById.get(entry.timesheetId ?? ""))
+            return {
+                id: entry.id,
+                projectName,
+                clientName: clientName ?? org.value?.name ?? "No client assigned",
+                durationLabel: formatHoursCompact(entry.durationMinutes ?? 0),
+                timeLabel: formatEntryTimeRange(entry),
+                icon: getProjectIcon(projectName),
+                status,
+            }
+        })
+})
+const employeeProjectAllocation = computed(() => {
+    const totals = new Map<string, number>()
+    for (const entry of myWeekEntries.value) {
+        totals.set(entry.projectId, (totals.get(entry.projectId) ?? 0) + (entry.durationMinutes ?? 0))
+    }
+    const max = Math.max(...totals.values(), 0)
+    return [...totals.entries()]
+        .map(([projectId, totalMinutes]) => ({
+            projectId,
+            projectName: projectNameById.value.get(projectId) ?? "Untitled project",
+            clientName: (() => {
+                const clientId = projectClientIdById.value.get(projectId)
+                return clientId ? clientNameById.value.get(clientId) ?? "Unassigned client" : "Unassigned client"
+            })(),
+            totalMinutes,
+            percent: max ? Math.round((totalMinutes / max) * 100) : 0,
+        }))
+        .sort((a, b) => b.totalMinutes - a.totalMinutes)
+        .slice(0, 3)
+})
+const reviewNeededCount = computed(() => {
+    const status = previousWeekTimesheet.value?.status
+    if (status === 2 || status === 1) return 0
+    return previousWeekEntries.value.length
+})
+const reviewCardTitle = computed(() => {
+    if (!reviewNeededCount.value) return "All set"
+    return "Review Needed"
+})
+const reviewCardMessage = computed(() => {
+    if (!reviewNeededCount.value) {
+        return "Your last submitted timesheet is already in good shape."
+    }
+    if (previousWeekTimesheet.value?.status === 3) {
+        return `You have ${reviewNeededCount.value} entries from last week that need updates before resubmission.`
+    }
+    return `You have ${reviewNeededCount.value} entries from last week that should be reviewed before submission.`
 })
 
 const statusSummary = computed(() => {
@@ -74,174 +210,25 @@ const statusSummary = computed(() => {
         draft,
     }
 })
-const statusSummaryLabel = computed(() => {
-    if (!statusSummary.value.total) return "No data"
-    const submittedOrApproved = statusSummary.value.submitted + statusSummary.value.approved
-    return `${submittedOrApproved}/${statusSummary.value.total}`
-})
-const statusSummaryMeta = computed(() => {
-    if (!statusSummary.value.total) return "No timesheets for this week."
-    return `${statusSummary.value.approved} approved • ${statusSummary.value.draft} draft • ${statusSummary.value.rejected} rejected`
-})
-const statusSummaryPill = computed(() => {
-    if (!statusSummary.value.total) return "No data"
-    if (statusSummary.value.submitted === statusSummary.value.total) return "On track"
-    if (statusSummary.value.rejected > 0) return "Needs attention"
-    return "In progress"
-})
-const statusToneClass = computed(() => {
-    if (!statusSummary.value.total) return "kpi-badge--neutral"
-    if (statusSummary.value.submitted === statusSummary.value.total) return "kpi-badge--success"
-    if (statusSummary.value.rejected > 0) return "kpi-badge--warning"
-    return "kpi-badge--info"
-})
-
 const weekMinutes = computed(() =>
     orgEntries.value.reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
 )
 const weekHours = computed(() => (weekMinutes.value / 60).toFixed(1))
-const activeProjectsCount = computed(
-    () => projects.value.filter((project) => project.isActive !== false).length
-)
-const teamSize = computed(() => members.value.filter((m) => m.isActive).length)
-const weekTargetHours = computed(() => teamSize.value * 40)
+const activeProjectsCount = computed(() => projects.value.filter((project) => project.isActive !== false).length)
+const teamSize = computed(() => members.value.filter((member) => member.isActive).length)
+const weekTargetHours = computed(() => teamSize.value * WEEKLY_TARGET_HOURS)
 const weekProgressPercent = computed(() =>
     weekTargetHours.value > 0
         ? Math.min(100, Math.round((Number(weekHours.value) / weekTargetHours.value) * 100))
         : 0
 )
-const avgHoursPerMember = computed(() => {
-    if (!teamSize.value) return "0.0"
-    return (Number(weekHours.value) / teamSize.value).toFixed(1)
-})
-const todayMinutes = computed(() =>
-    orgEntries.value
-        .filter((entry) => entry.workDate === today)
-        .reduce((sum, entry) => sum + (entry.durationMinutes ?? 0), 0)
-)
-const todayEntriesCount = computed(
-    () => orgEntries.value.filter((entry) => entry.workDate === today).length
-)
-
-const projectNameById = computed(() => {
-    const map = new Map<string, string>()
-    for (const project of projects.value) map.set(project.id, project.name ?? "Unnamed project")
-    return map
-})
-const clientNameById = computed(() => {
-    const map = new Map<string, string>()
-    for (const client of clients.value) map.set(client.id, client.name ?? "Unnamed client")
-    return map
-})
-const selectedClientName = computed(() => {
-    if (!selectedClientFilter.value) return ""
-    return clientNameById.value.get(selectedClientFilter.value) ?? ""
-})
-
-const hoursByProject = computed(() => {
-    const visibleProjects = selectedClientFilter.value
-        ? projects.value.filter((project) => (project.clientId ?? "unassigned") === selectedClientFilter.value)
-        : projects.value
-    const visibleProjectIds = new Set(visibleProjects.map((project) => project.id))
-
-    const totals = new Map<string, number>()
-    for (const entry of orgEntries.value) {
-        if (!visibleProjectIds.has(entry.projectId)) continue
-        totals.set(entry.projectId, (totals.get(entry.projectId) ?? 0) + (entry.durationMinutes ?? 0))
-    }
-    const max = Math.max(...totals.values(), 0)
-    return [...totals.entries()]
-        .map(([projectId, totalMinutes]) => ({
-            projectId,
-            label: projectNameById.value.get(projectId) ?? "Unknown project",
-            totalMinutes,
-            percent: max ? Math.round((totalMinutes / max) * 100) : 0,
-        }))
-        .sort((a, b) => b.totalMinutes - a.totalMinutes)
-        .slice(0, 6)
-})
-
-const hoursByClient = computed(() => {
-    const projectClientMap = new Map<string, string>()
-    for (const project of projects.value) {
-        projectClientMap.set(project.id, project.clientId ?? "unassigned")
-    }
-    const totals = new Map<string, number>()
-    for (const entry of orgEntries.value) {
-        const clientId = projectClientMap.get(entry.projectId) ?? "unassigned"
-        totals.set(clientId, (totals.get(clientId) ?? 0) + (entry.durationMinutes ?? 0))
-    }
-    const max = Math.max(...totals.values(), 0)
-    return [...totals.entries()]
-        .map(([clientId, totalMinutes]) => ({
-            clientId,
-            label:
-                clientId === "unassigned"
-                    ? "Unassigned"
-                    : clientNameById.value.get(clientId) ?? "Unknown client",
-            totalMinutes,
-            percent: max ? Math.round((totalMinutes / max) * 100) : 0,
-        }))
-        .sort((a, b) => b.totalMinutes - a.totalMinutes)
-        .slice(0, 6)
-})
-
-const weekTrend = computed(() => {
-    const start = new Date(weekStartDate.value)
-    const days: Array<{ date: string; label: string; totalMinutes: number; height: number }> = []
-    const totalsByDate = new Map<string, number>()
-    for (const entry of orgEntries.value) {
-        totalsByDate.set(entry.workDate, (totalsByDate.get(entry.workDate) ?? 0) + (entry.durationMinutes ?? 0))
-    }
-    for (let i = 0; i < 7; i++) {
-        const day = new Date(start)
-        day.setDate(start.getDate() + i)
-        const key = formatDateForInput(day)
-        days.push({
-            date: key,
-            label: day.toLocaleDateString(undefined, { weekday: "short" }),
-            totalMinutes: totalsByDate.get(key) ?? 0,
-            height: 0,
-        })
-    }
-    const max = Math.max(...days.map((d) => d.totalMinutes), 0)
-    return days.map((day) => ({
-        ...day,
-        height: max ? Math.max(8, Math.round((day.totalMinutes / max) * 100)) : 8,
-    }))
-})
-
 const dashboardStatusSummary = computed(() => {
     const total = statusSummary.value.total
     const items = [
-        {
-            key: "approved",
-            label: "Approved",
-            count: statusSummary.value.approved,
-            icon: "mdi:check-circle",
-            tone: "success",
-        },
-        {
-            key: "submitted",
-            label: "Submitted",
-            count: statusSummary.value.submitted,
-            icon: "mdi:progress-clock",
-            tone: "warning",
-        },
-        {
-            key: "draft",
-            label: "Draft",
-            count: statusSummary.value.draft,
-            icon: "mdi:file-document-edit-outline",
-            tone: "neutral",
-        },
-        {
-            key: "rejected",
-            label: "Rejected",
-            count: statusSummary.value.rejected,
-            icon: "mdi:close-circle",
-            tone: "danger",
-        },
+        { key: "approved", label: "Approved", count: statusSummary.value.approved, icon: "mdi:check-circle", tone: "success" },
+        { key: "submitted", label: "Submitted", count: statusSummary.value.submitted, icon: "mdi:progress-clock", tone: "warning" },
+        { key: "draft", label: "Draft", count: statusSummary.value.draft, icon: "mdi:file-document-edit-outline", tone: "neutral" },
+        { key: "rejected", label: "Rejected", count: statusSummary.value.rejected, icon: "mdi:close-circle", tone: "danger" },
     ]
 
     return items.map((item) => ({
@@ -249,11 +236,35 @@ const dashboardStatusSummary = computed(() => {
         percent: total ? Math.round((item.count / total) * 100) : 0,
     }))
 })
+const managerTrend = computed(() => {
+    const totalsByDate = new Map<string, number>()
+    for (const entry of orgEntries.value) {
+        totalsByDate.set(entry.workDate, (totalsByDate.get(entry.workDate) ?? 0) + (entry.durationMinutes ?? 0))
+    }
 
-onMounted(() => loadDashboard())
+    const days = Array.from({ length: 7 }, (_, index) => {
+        const date = addDays(new Date(weekStartDate.value), index)
+        const key = formatDateForInput(date)
+        return {
+            date: key,
+            label: date.toLocaleDateString(undefined, { weekday: "short" }),
+            totalMinutes: totalsByDate.get(key) ?? 0,
+        }
+    })
+    const max = Math.max(...days.map((day) => day.totalMinutes), 0)
+    return days.map((day) => ({
+        ...day,
+        height: max ? Math.max(12, Math.round((day.totalMinutes / max) * 100)) : 12,
+    }))
+})
+const managerProjectAllocation = computed(() => buildProjectTotals(orgEntries.value).slice(0, 5))
+
+onMounted(() => {
+    void loadDashboard()
+})
+
 watch(weekStartDate, () => {
-    selectedClientFilter.value = null
-    loadDashboard()
+    void loadDashboard()
 })
 
 async function loadDashboard() {
@@ -261,44 +272,18 @@ async function loadDashboard() {
     error.value = null
     try {
         const orgs = await organizationsApi.getMine()
-        if (!orgs?.length) {
+        const firstOrg = orgs?.[0] ?? null
+        if (!firstOrg?.id) {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
 
-        const firstOrg = orgs[0]
-        if (!firstOrg) return
         org.value = firstOrg
 
-        const [membersResult, projectsResult, clientsResult, orgTimesheetsResult] = await Promise.all([
-            organizationsApi.getMembers(org.value.id),
-            projectsApi.list(org.value.id),
-            clientsApi.list(org.value.id),
-            timesheetsApi.listOrg(org.value.id, {
-                fromWeekStart: weekStartDate.value,
-                toWeekStart: weekStartDate.value,
-            }),
-        ])
-
-        members.value = membersResult
-        projects.value = projectsResult
-        clients.value = clientsResult
-
-        orgTimesheets.value = orgTimesheetsResult
-        if (orgTimesheets.value.length) {
-            const entriesByTimesheet = await Promise.all(
-                orgTimesheets.value.map((ts) => timesheetEntriesApi.list(org.value!.id, ts.id))
-            )
-            orgEntries.value = entriesByTimesheet.flat()
+        if (isEmployeeOnly.value) {
+            await loadEmployeeDashboard(firstOrg.id)
         } else {
-            orgEntries.value = []
-        }
-
-        if (myMember.value && (myMember.value.role === 0 || myMember.value.role === 1)) {
-            const pending = await timesheetsApi.listPendingApproval(org.value.id)
-            pendingApprovalCount.value = pending.length
-        } else {
-            pendingApprovalCount.value = 0
+            await loadManagerDashboard(firstOrg.id)
         }
     } catch (e) {
         console.error("Load dashboard error:", e)
@@ -308,6 +293,132 @@ async function loadDashboard() {
     }
 }
 
+async function loadEmployeeDashboard(organizationId: string) {
+    const [membersResult, projectsResult, clientsResult, currentWeekTimesheets, previousWeekTimesheets, recentTimesheets] = await Promise.all([
+        organizationsApi.getMembers(organizationId),
+        projectsApi.list(organizationId, { isActive: true }),
+        clientsApi.list(organizationId),
+        timesheetsApi.listMine(organizationId, { fromWeekStart: weekStartDate.value, toWeekStart: weekStartDate.value }),
+        timesheetsApi.listMine(organizationId, {
+            fromWeekStart: previousWeekStart.value,
+            toWeekStart: previousWeekStart.value,
+        }),
+        timesheetsApi.listMine(organizationId, {
+            fromWeekStart: previousWeekStart.value,
+            toWeekStart: weekStartDate.value,
+        }),
+    ])
+
+    members.value = membersResult
+    projects.value = projectsResult
+    clients.value = clientsResult
+
+    myWeekTimesheet.value = currentWeekTimesheets[0] ?? null
+    previousWeekTimesheet.value = previousWeekTimesheets[0] ?? null
+    myRecentTimesheets.value = recentTimesheets
+
+    const [weekEntries, previousEntries, recentEntries] = await Promise.all([
+        myWeekTimesheet.value ? timesheetEntriesApi.list(organizationId, myWeekTimesheet.value.id) : Promise.resolve([]),
+        previousWeekTimesheet.value ? timesheetEntriesApi.list(organizationId, previousWeekTimesheet.value.id) : Promise.resolve([]),
+        Promise.all(
+            recentTimesheets.map((sheet) => timesheetEntriesApi.list(organizationId, sheet.id))
+        ).then((rows) => rows.flat()),
+    ])
+
+    myWeekEntries.value = weekEntries
+    previousWeekEntries.value = previousEntries
+    myRecentEntries.value = recentEntries
+
+    orgTimesheets.value = []
+    orgEntries.value = []
+    pendingApprovalCount.value = 0
+}
+
+async function loadManagerDashboard(organizationId: string) {
+    const [membersResult, projectsResult, clientsResult, orgTimesheetsResult, pending] = await Promise.all([
+        organizationsApi.getMembers(organizationId),
+        projectsApi.list(organizationId),
+        clientsApi.list(organizationId),
+        timesheetsApi.listOrg(organizationId, { fromWeekStart: weekStartDate.value, toWeekStart: weekStartDate.value }),
+        timesheetsApi.listPendingApproval(organizationId),
+    ])
+
+    members.value = membersResult
+    projects.value = projectsResult
+    clients.value = clientsResult
+    orgTimesheets.value = orgTimesheetsResult
+    pendingApprovalCount.value = pending.length
+
+    orgEntries.value = orgTimesheetsResult.length
+        ? (await Promise.all(orgTimesheetsResult.map((sheet) => timesheetEntriesApi.list(organizationId, sheet.id)))).flat()
+        : []
+
+    myWeekTimesheet.value = null
+    myWeekEntries.value = []
+    myRecentTimesheets.value = []
+    myRecentEntries.value = []
+    previousWeekTimesheet.value = null
+    previousWeekEntries.value = []
+}
+
+function shiftWeek(direction: -1 | 1) {
+    const base = new Date(weekStartDate.value)
+    base.setDate(base.getDate() + direction * 7)
+    const nextWeek = formatDateForInput(getWeekStart(base))
+    weekStartDate.value = nextWeek > currentWeekStart.value ? currentWeekStart.value : nextWeek
+}
+
+function goToThisWeek() {
+    if (isCurrentWeek.value) return
+    weekStartDate.value = currentWeekStart.value
+}
+
+function buildProjectTotals(entries: TimesheetEntry[]) {
+    const totals = new Map<string, number>()
+    for (const entry of entries) {
+        totals.set(entry.projectId, (totals.get(entry.projectId) ?? 0) + (entry.durationMinutes ?? 0))
+    }
+    const max = Math.max(...totals.values(), 0)
+    return [...totals.entries()]
+        .map(([projectId, totalMinutes]) => ({
+            projectId,
+            label: projectNameById.value.get(projectId) ?? "Untitled project",
+            totalMinutes,
+            percent: max ? Math.round((totalMinutes / max) * 100) : 0,
+        }))
+        .sort((a, b) => b.totalMinutes - a.totalMinutes)
+}
+
+function getProjectIcon(projectName: string) {
+    const label = projectName.toLowerCase()
+    if (label.includes("design")) return "mdi:pencil-ruler"
+    if (label.includes("front") || label.includes("dev") || label.includes("engineer")) return "mdi:code-tags"
+    if (label.includes("plan") || label.includes("review")) return "mdi:account-group-outline"
+    return "mdi:briefcase-outline"
+}
+
+function getTimesheetStatusMeta(status?: number) {
+    if (status === 2) return { label: "Approved", className: "employee-entry__status--approved" }
+    if (status === 1) return { label: "Submitted", className: "employee-entry__status--submitted" }
+    if (status === 3) return { label: "Needs changes", className: "employee-entry__status--warning" }
+    return { label: "Draft", className: "employee-entry__status--draft" }
+}
+
+function sortEntriesByMostRecent(a: TimesheetEntry, b: TimesheetEntry) {
+    const aValue = `${a.workDate}T${a.startTime ?? "23:59"}`
+    const bValue = `${b.workDate}T${b.startTime ?? "23:59"}`
+    return bValue.localeCompare(aValue)
+}
+
+function formatEntryTimeRange(entry: TimesheetEntry) {
+    if (entry.startTime && entry.endTime) return `${entry.startTime.slice(0, 5)} - ${entry.endTime.slice(0, 5)}`
+    return formatDateMedium(entry.workDate)
+}
+
+function formatHoursCompact(totalMinutes: number) {
+    return `${(totalMinutes / 60).toFixed(1)}h`
+}
+
 function getWeekStart(date: Date) {
     const start = new Date(date)
     const day = start.getDay()
@@ -315,6 +426,12 @@ function getWeekStart(date: Date) {
     start.setDate(start.getDate() - diff)
     start.setHours(0, 0, 0, 0)
     return start
+}
+
+function addDays(date: Date, days: number) {
+    const next = new Date(date)
+    next.setDate(next.getDate() + days)
+    return next
 }
 
 function formatDateForInput(date: Date) {
@@ -328,842 +445,854 @@ function formatShortDate(date: Date) {
     return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
 }
 
+function formatDateMedium(value: string) {
+    const date = new Date(value)
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
 function formatMinutes(total: number) {
     const hours = Math.floor(total / 60)
     const minutes = total % 60
     if (!hours) return `${minutes}m`
+    if (!minutes) return `${hours}h`
     return `${hours}h ${minutes}m`
 }
 
-function shiftWeek(direction: -1 | 1) {
-    const base = new Date(weekStartDate.value)
-    base.setDate(base.getDate() + direction * 7)
-    const nextWeek = formatDateForInput(getWeekStart(base))
-    weekStartDate.value = nextWeek > currentWeekStart.value ? currentWeekStart.value : nextWeek
+function getRolesFromToken(rawToken: string | null | undefined) {
+    if (!rawToken) return []
+    const payload = decodeJwtPayload(rawToken)
+    if (!payload || typeof payload !== "object") return []
+    const claimKey = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
+    const rawRoles = [payload[claimKey], payload.role, payload.roles]
+    return rawRoles
+        .flatMap((role) => normalizeRoles(role))
+        .map((role) => role.toLowerCase())
+        .filter(Boolean)
 }
 
-function goToThisWeek() {
-    if (isCurrentWeek.value) return
-    weekStartDate.value = formatDateForInput(getWeekStart(new Date()))
+function normalizeRoles(value: unknown): string[] {
+    if (!value) return []
+    if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string")
+    if (typeof value === "string") {
+        return value
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+    }
+    return []
 }
 
-function toggleClientFilter(clientId: string) {
-    selectedClientFilter.value = selectedClientFilter.value === clientId ? null : clientId
+function decodeJwtPayload(rawToken: string) {
+    const [, payload] = rawToken.split(".")
+    if (!payload || typeof atob !== "function") return null
+    try {
+        const normalized = payload.replace(/-/g, "+").replace(/_/g, "/")
+        const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")
+        return JSON.parse(atob(padded)) as Record<string, unknown>
+    } catch {
+        return null
+    }
 }
 </script>
 
 <template>
-    <section class="dashboard">
-        <header class="dash-hero card">
-            <div class="dash-hero__left">
-                <p class="dash-hero__eyebrow">Executive dashboard</p>
-                <h1 class="dash-hero__title">Welcome back, {{ userDisplayName }}</h1>
-                <p class="dash-hero__subtitle">
-                    Real-time visibility into team workload, approvals, and project delivery for
-                    {{ org?.name }}.
-                </p>
-                <div class="dash-hero__meta">
-                    <span class="dash-hero__range-pill">
-                        <Icon name="mdi:calendar-range" size="16" />
-                        {{ weekLabel }}
-                    </span>
-                    <span class="dash-hero__meta-text">
-                        {{ teamSize }} active team members • {{ activeProjectsCount }} active projects
-                    </span>
-                </div>
-                <div class="dash-hero__week-controls">
-                    <button type="button" class="btn btn-secondary btn-sm btn-inline" @click="shiftWeek(-1)">
-                        <Icon name="mdi:chevron-left" size="18" />
-                        Previous week
-                    </button>
-                    <button
-                        type="button"
-                        class="btn btn-secondary btn-sm btn-inline"
-                        :disabled="isCurrentWeek"
-                        @click="goToThisWeek"
-                    >
-                        <Icon name="mdi:calendar-today-outline" size="18" />
-                        This week
-                    </button>
-                </div>
-            </div>
-            <div class="dash-hero__right">
-                <NuxtLink to="/track" class="btn btn-primary btn-inline">
-                    <Icon name="mdi:plus" size="18" />
-                    Track time
-                </NuxtLink>
-                <NuxtLink to="/timesheets" class="btn btn-secondary btn-inline">
-                    <Icon name="mdi:calendar-text-outline" size="18" />
-                    Open timesheet
-                </NuxtLink>
-                <NuxtLink v-if="isManagerOrAdmin" to="/approvals" class="btn btn-secondary btn-inline">
-                    <Icon name="mdi:clipboard-check-outline" size="18" />
-                    Review approvals
-                </NuxtLink>
-            </div>
-        </header>
-
+    <section class="dashboard-page">
         <div v-if="error" class="alert" role="alert">
             <div class="alert__title">{{ error.title }}</div>
             <div class="alert__msg">{{ error.message }}</div>
         </div>
 
-        <template v-else-if="loading">
-            <section class="card dash-loading">
-                <p class="muted">Loading dashboard...</p>
+        <section v-else-if="loading" class="card dashboard-loading">
+            <p>Loading dashboard…</p>
+        </section>
+
+        <template v-else-if="isEmployeeOnly">
+            <section class="employee-dashboard">
+                <header class="employee-hero card">
+                    <div class="employee-hero__content">
+                        <p class="employee-hero__eyebrow">Weekly overview</p>
+                        <h1 class="employee-hero__title">
+                            {{ employeeWeekHours }}
+                            <span>hours</span>
+                        </h1>
+                        <p class="employee-hero__copy">
+                            You've reached {{ employeeWeekProgress }}% of your weekly target.
+                            {{ employeeTopProjectSummary }}
+                        </p>
+                        <div class="employee-hero__meta">
+                            <span class="employee-hero__pill">
+                                <Icon name="mdi:calendar-range" size="16" />
+                                {{ weekLabel }}
+                            </span>
+                            <span>{{ firstName }}, keep the momentum going.</span>
+                        </div>
+                    </div>
+
+                    <div class="employee-hero__actions">
+                        <NuxtLink to="/track" class="employee-cta employee-cta--primary">
+                            <Icon name="mdi:plus" size="22" />
+                            New Time Entry
+                        </NuxtLink>
+                        <NuxtLink to="/timesheets" class="employee-cta employee-cta--secondary">
+                            Submit Weekly
+                        </NuxtLink>
+                    </div>
+                </header>
+
+                <section class="employee-days card">
+                    <button
+                        type="button"
+                        class="employee-days__nav"
+                        @click="shiftWeek(-1)"
+                    >
+                        <Icon name="mdi:chevron-left" size="20" />
+                    </button>
+                    <div class="employee-days__grid">
+                        <article
+                            v-for="day in employeeDailyOverview"
+                            :key="day.key"
+                            class="employee-day"
+                            :class="{
+                                'employee-day--active': highlightedDayKey === day.key,
+                                'employee-day--muted': day.isWeekend,
+                            }"
+                        >
+                            <p class="employee-day__label">{{ day.shortDay }} {{ day.dayOfMonth }}</p>
+                            <p class="employee-day__value">
+                                {{ day.totalMinutes ? formatHoursCompact(day.totalMinutes) : '—' }}
+                            </p>
+                        </article>
+                    </div>
+                    <button
+                        type="button"
+                        class="employee-days__nav"
+                        :disabled="isCurrentWeek"
+                        @click="goToThisWeek"
+                    >
+                        <Icon name="mdi:calendar-today-outline" size="20" />
+                    </button>
+                </section>
+
+                <section class="employee-grid">
+                    <article class="employee-panel employee-panel--entries card">
+                        <header class="employee-panel__head">
+                            <div>
+                                <h2>Recent Entries</h2>
+                                <p>Your latest logged sessions across the last two weeks.</p>
+                            </div>
+                            <NuxtLink to="/timesheets" class="employee-panel__link">View History</NuxtLink>
+                        </header>
+
+                        <div v-if="recentEntryRows.length" class="employee-entry-list">
+                            <article v-for="entry in recentEntryRows" :key="entry.id" class="employee-entry">
+                                <div class="employee-entry__icon">
+                                    <Icon :name="entry.icon" size="22" />
+                                </div>
+                                <div class="employee-entry__body">
+                                    <h3>{{ entry.projectName }}</h3>
+                                    <p>{{ entry.clientName }}</p>
+                                </div>
+                                <div class="employee-entry__meta">
+                                    <strong>{{ entry.durationLabel }}</strong>
+                                    <span>{{ entry.timeLabel }}</span>
+                                </div>
+                                <span class="employee-entry__status" :class="entry.status.className">
+                                    {{ entry.status.label }}
+                                </span>
+                            </article>
+                        </div>
+                        <p v-else class="employee-empty">No recent entries yet. Start with a new time entry.</p>
+                    </article>
+
+                    <div class="employee-side-stack">
+                        <article class="employee-panel card">
+                            <header class="employee-panel__head employee-panel__head--compact">
+                                <div>
+                                    <h2>Project Allocation</h2>
+                                    <p>Where your week is going.</p>
+                                </div>
+                            </header>
+
+                            <div v-if="employeeProjectAllocation.length" class="allocation-list">
+                                <article
+                                    v-for="item in employeeProjectAllocation"
+                                    :key="item.projectId"
+                                    class="allocation-item"
+                                >
+                                    <div class="allocation-item__row">
+                                        <div>
+                                            <h3>{{ item.projectName }}</h3>
+                                            <p>{{ item.clientName }}</p>
+                                        </div>
+                                        <strong>{{ formatHoursCompact(item.totalMinutes) }}</strong>
+                                    </div>
+                                    <div class="allocation-item__track">
+                                        <div class="allocation-item__fill" :style="{ width: `${item.percent}%` }"></div>
+                                    </div>
+                                </article>
+                            </div>
+                            <p v-else class="employee-empty">No project allocation data yet for this week.</p>
+                        </article>
+
+                        <article class="employee-panel employee-panel--review card">
+                            <div class="employee-panel__badge">
+                                <Icon name="mdi:clipboard-alert-outline" size="18" />
+                                {{ reviewCardTitle }}
+                            </div>
+                            <p class="employee-panel__review-copy">{{ reviewCardMessage }}</p>
+                            <NuxtLink to="/timesheets" class="employee-panel__review-link">
+                                Go to Timesheets
+                                <Icon name="mdi:arrow-right" size="18" />
+                            </NuxtLink>
+                        </article>
+                    </div>
+                </section>
             </section>
         </template>
 
         <template v-else>
-            <section class="dashboard-kpis">
-                <article class="card kpi-card">
+            <section class="manager-dashboard">
+                <header class="manager-hero card">
                     <div>
-                        <p class="kpi-card__label">Hours this week</p>
-                        <p class="kpi-card__value">{{ weekHours }}h</p>
-                        <p class="kpi-card__meta">
-                            {{ weekProgressPercent }}% of the {{ weekTargetHours }}h weekly capacity target
-                        </p>
-                        <div class="kpi-progress">
-                            <div class="kpi-progress__fill" :style="{ width: `${weekProgressPercent}%` }"></div>
-                        </div>
-                    </div>
-                    <span class="kpi-card__icon kpi-card__icon--primary">
-                        <Icon name="mdi:clock-outline" size="24" />
-                    </span>
-                </article>
-
-                <article class="card kpi-card">
-                    <div>
-                        <p class="kpi-card__label">Timesheet coverage</p>
-                        <p class="kpi-card__value">{{ statusSummaryLabel }}</p>
-                        <p class="kpi-card__meta">{{ statusSummaryMeta }}</p>
-                        <span class="kpi-badge" :class="statusToneClass">{{ statusSummaryPill }}</span>
-                    </div>
-                    <span class="kpi-card__icon kpi-card__icon--info">
-                        <Icon name="mdi:file-document-check-outline" size="24" />
-                    </span>
-                </article>
-
-                <article class="card kpi-card">
-                    <div>
-                        <p class="kpi-card__label">Today's activity</p>
-                        <p class="kpi-card__value">{{ formatMinutes(todayMinutes) }}</p>
-                        <p class="kpi-card__meta">
-                            {{ todayEntriesCount }} entries logged today • {{ avgHoursPerMember }}h average per active member
+                        <p class="manager-hero__eyebrow">Leadership snapshot</p>
+                        <h1>Welcome back, {{ userDisplayName }}</h1>
+                        <p>
+                            Team-wide visibility into hours, timesheet health, and project delivery for
+                            {{ org?.name }}.
                         </p>
                     </div>
-                    <span class="kpi-card__icon kpi-card__icon--accent">
-                        <Icon name="mdi:chart-timeline-variant" size="24" />
-                    </span>
-                </article>
-
-                <article class="card kpi-card">
-                    <div>
-                        <p class="kpi-card__label">Workspace footprint</p>
-                        <p class="kpi-card__value">{{ activeProjectsCount }}</p>
-                        <p class="kpi-card__meta">{{ clients.length }} clients • {{ teamSize }} active team members</p>
+                    <div class="manager-hero__actions">
+                        <button type="button" class="btn btn-secondary" @click="shiftWeek(-1)">
+                            Previous week
+                        </button>
+                        <button type="button" class="btn btn-secondary" :disabled="isCurrentWeek" @click="goToThisWeek">
+                            This week
+                        </button>
+                        <NuxtLink v-if="isManagerOrAdmin" to="/approvals" class="btn btn-primary">
+                            Review approvals
+                        </NuxtLink>
                     </div>
-                    <span class="kpi-card__icon kpi-card__icon--neutral">
-                        <Icon name="mdi:briefcase-outline" size="24" />
-                    </span>
-                </article>
+                </header>
 
-                <article v-if="isManagerOrAdmin" class="card kpi-card">
-                    <div>
-                        <p class="kpi-card__label">Pending approvals</p>
-                        <p class="kpi-card__value">{{ pendingApprovalCount }}</p>
-                        <p class="kpi-card__meta">Timesheets currently waiting for manager action</p>
-                    </div>
-                    <span class="kpi-card__icon kpi-card__icon--success">
-                        <Icon name="mdi:clipboard-check-outline" size="24" />
-                    </span>
-                </article>
-            </section>
+                <section class="manager-kpis">
+                    <article class="manager-kpi card">
+                        <p>Hours this week</p>
+                        <strong>{{ weekHours }}h</strong>
+                        <span>{{ weekProgressPercent }}% of {{ weekTargetHours }}h team target</span>
+                    </article>
+                    <article class="manager-kpi card">
+                        <p>Pending approvals</p>
+                        <strong>{{ pendingApprovalCount }}</strong>
+                        <span>Timesheets awaiting action</span>
+                    </article>
+                    <article class="manager-kpi card">
+                        <p>Active projects</p>
+                        <strong>{{ activeProjectsCount }}</strong>
+                        <span>{{ teamSize }} active team members</span>
+                    </article>
+                </section>
 
-            <section class="dashboard-content">
-                <article class="card report-panel report-panel--trend">
-                    <header class="report-panel__head report-panel__head--spread">
-                        <div>
-                            <p class="dashboard-section-label">Trend</p>
-                            <h2 class="dashboard-section-title">Weekly hour trend</h2>
-                            <p class="report-panel__subtitle">
-                                Daily logged time for the selected week, modeled after the reports view.
-                            </p>
+                <section class="manager-grid">
+                    <article class="card manager-panel">
+                        <header class="manager-panel__head">
+                            <h2>Weekly trend</h2>
+                            <span>{{ weekLabel }}</span>
+                        </header>
+                        <div class="manager-trend">
+                            <article v-for="day in managerTrend" :key="day.date" class="manager-trend__day">
+                                <span>{{ formatMinutes(day.totalMinutes) }}</span>
+                                <div class="manager-trend__bar-wrap">
+                                    <div class="manager-trend__bar" :style="{ height: `${day.height}%` }"></div>
+                                </div>
+                                <strong>{{ day.label }}</strong>
+                            </article>
                         </div>
-                        <div class="report-panel__legend">
-                            <span class="report-panel__legend-dot"></span>
-                            Logged time
-                        </div>
-                    </header>
-                    <div class="trend-chart trend-chart--daily">
-                        <div v-for="day in weekTrend" :key="day.date" class="trend-chart__item">
-                            <p class="trend-chart__value">{{ formatMinutes(day.totalMinutes) }}</p>
-                            <div class="trend-chart__bar-wrap">
-                                <div
-                                    class="trend-chart__bar"
-                                    :style="{
-                                        height: `${day.height}%`,
-                                        animationDelay: `${(new Date(day.date).getDay() + 1) * 40}ms`,
-                                    }"
-                                ></div>
-                            </div>
-                            <p class="trend-chart__label">{{ day.label }}</p>
-                        </div>
-                    </div>
-                </article>
+                    </article>
 
-                <article class="card report-panel report-panel--status">
-                    <header class="report-panel__head">
-                        <p class="dashboard-section-label">Statuses</p>
-                        <h2 class="dashboard-section-title">Timesheet status summary</h2>
-                        <p class="report-panel__subtitle">
-                            Current state of all timesheets inside the selected week.
-                        </p>
-                    </header>
-                    <div class="status-list">
-                        <div
-                            v-for="item in dashboardStatusSummary"
-                            :key="item.key"
-                            class="status-list__item"
-                            :class="`status-list__item--${item.tone}`"
-                        >
-                            <div class="status-list__label-wrap">
-                                <span class="status-list__icon">
-                                    <Icon :name="item.icon" size="18" />
-                                </span>
-                                <span class="status-list__label">{{ item.label }}</span>
-                            </div>
-                            <div class="status-list__metrics">
-                                <strong>{{ item.count }}</strong>
-                                <span>{{ item.percent }}%</span>
-                            </div>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="card report-panel">
-                    <header class="report-panel__head">
-                        <p class="dashboard-section-label">Projects</p>
-                        <h2 class="dashboard-section-title">Hours by project</h2>
-                        <p class="report-panel__subtitle">
-                            Top project allocation for this week, with quick links into tracking.
-                        </p>
-                    </header>
-                    <ul v-if="hoursByProject.length" class="rank-list">
-                        <li v-for="item in hoursByProject" :key="item.projectId" class="rank-list__item">
-                            <div class="rank-list__row">
-                                <span class="rank-list__name">{{ item.label }}</span>
-                                <strong class="rank-list__value">{{ formatMinutes(item.totalMinutes) }}</strong>
-                            </div>
-                            <div class="rank-list__track">
-                                <div class="rank-list__fill" :style="{ width: `${item.percent}%` }"></div>
-                            </div>
-                            <NuxtLink
-                                class="rank-list__cta"
-                                :to="{
-                                    path: '/track',
-                                    query: {
-                                        projectId: item.projectId,
-                                        date: weekStartDate,
-                                    },
-                                }"
+                    <article class="card manager-panel">
+                        <header class="manager-panel__head">
+                            <h2>Timesheet status summary</h2>
+                            <span>{{ statusSummary.total }} total</span>
+                        </header>
+                        <div class="manager-status-list">
+                            <article
+                                v-for="item in dashboardStatusSummary"
+                                :key="item.key"
+                                class="manager-status-item"
                             >
-                                Open in track
-                            </NuxtLink>
-                        </li>
-                    </ul>
-                    <p v-else class="muted">No project activity this week.</p>
-                </article>
+                                <div>
+                                    <strong>{{ item.label }}</strong>
+                                    <p>{{ item.count }} timesheets</p>
+                                </div>
+                                <span>{{ item.percent }}%</span>
+                            </article>
+                        </div>
+                    </article>
 
-                <article class="card report-panel">
-                    <header class="report-panel__head">
-                        <p class="dashboard-section-label">Clients</p>
-                        <h2 class="dashboard-section-title">Hours by client</h2>
-                        <p class="report-panel__subtitle">
-                            Click a client to focus the project list on that account.
-                        </p>
-                    </header>
-                    <ul v-if="hoursByClient.length" class="rank-list">
-                        <li
-                            v-for="item in hoursByClient"
-                            :key="item.clientId"
-                            class="rank-list__item rank-list__item--interactive"
-                            :class="{ 'rank-list__item--active': selectedClientFilter === item.clientId }"
-                        >
-                            <button type="button" class="rank-list__button" @click="toggleClientFilter(item.clientId)">
-                                <div class="rank-list__row">
-                                    <span class="rank-list__name">{{ item.label }}</span>
-                                    <strong class="rank-list__value">{{ formatMinutes(item.totalMinutes) }}</strong>
+                    <article class="card manager-panel">
+                        <header class="manager-panel__head">
+                            <h2>Top project allocation</h2>
+                            <span>Selected week</span>
+                        </header>
+                        <div v-if="managerProjectAllocation.length" class="allocation-list">
+                            <article v-for="item in managerProjectAllocation" :key="item.projectId" class="allocation-item">
+                                <div class="allocation-item__row">
+                                    <h3>{{ item.label }}</h3>
+                                    <strong>{{ formatMinutes(item.totalMinutes) }}</strong>
                                 </div>
-                                <div class="rank-list__track">
-                                    <div class="rank-list__fill rank-list__fill--client" :style="{ width: `${item.percent}%` }"></div>
+                                <div class="allocation-item__track">
+                                    <div class="allocation-item__fill" :style="{ width: `${item.percent}%` }"></div>
                                 </div>
-                            </button>
-                        </li>
-                    </ul>
-                    <p v-else class="muted">No client-linked activity this week.</p>
-                    <p class="report-panel__helper" :class="{ 'report-panel__helper--active': Boolean(selectedClientFilter) }">
-                        {{
-                            selectedClientFilter
-                                ? `Project list filtered to ${selectedClientName || 'the selected client'}.`
-                                : 'Showing all clients.'
-                        }}
-                    </p>
-                </article>
+                            </article>
+                        </div>
+                        <p v-else class="employee-empty">No project activity recorded this week.</p>
+                    </article>
+                </section>
             </section>
         </template>
     </section>
 </template>
 
 <style scoped>
-.dashboard {
+.dashboard-page {
     display: grid;
     gap: var(--s-4);
 }
 
-.dash-hero {
+.dashboard-loading,
+.employee-hero,
+.employee-days,
+.employee-panel,
+.manager-hero,
+.manager-kpi,
+.manager-panel {
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+}
+
+.alert {
+    border-radius: var(--r-lg);
+    border: 1px solid color-mix(in srgb, var(--danger) 20%, white);
+    background: color-mix(in srgb, var(--danger-soft) 78%, white);
+    padding: var(--s-4);
+}
+
+.alert__title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.dashboard-loading {
     padding: var(--s-5);
+}
+
+.employee-dashboard,
+.manager-dashboard {
+    display: grid;
+    gap: var(--s-4);
+}
+
+.employee-hero {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    gap: var(--s-4);
-    background: var(--surface);
+    align-items: stretch;
+    gap: var(--s-5);
+    padding: clamp(20px, 3vw, 32px);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--primary-soft) 72%, white), white 65%);
 }
 
-.dash-hero__left {
+.employee-hero__content {
     display: grid;
-    gap: var(--s-2);
+    gap: var(--s-3);
+    max-width: 720px;
 }
 
-.dash-hero__eyebrow,
-.dashboard-section-label {
+.employee-hero__eyebrow,
+.manager-hero__eyebrow {
     margin: 0;
-    font-size: 0.78rem;
-    text-transform: uppercase;
+    color: var(--primary);
+    font-weight: 800;
     letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+}
+
+.employee-hero__title {
+    margin: 0;
+    font-size: clamp(2.4rem, 5vw, 4.5rem);
+    line-height: 0.95;
+    color: var(--text-1);
+}
+
+.employee-hero__title span {
+    font-size: clamp(1.2rem, 2.2vw, 2rem);
+    font-weight: 500;
     color: var(--text-3);
-    font-weight: 700;
+    margin-left: 0.35rem;
 }
 
-.dash-hero__title {
+.employee-hero__copy,
+.employee-panel__head p,
+.employee-panel__review-copy,
+.employee-empty,
+.manager-hero p,
+.manager-kpi span,
+.manager-status-item p {
     margin: 0;
-    font-size: clamp(1.5rem, 3vw, 2.2rem);
-    line-height: 1.1;
+    color: var(--text-2);
+    line-height: 1.6;
 }
 
-.dash-hero__subtitle,
-.dash-hero__meta-text,
-.kpi-card__meta,
-.report-panel__subtitle,
-.report-panel__helper,
-.muted {
-    margin: 0;
+.employee-hero__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-3);
+    align-items: center;
     color: var(--text-2);
 }
 
-.dash-hero__meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    align-items: center;
-}
-
-.dash-hero__range-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    border-radius: var(--r-pill);
-    background: var(--primary-soft);
-    color: var(--primary);
-    font-size: 0.875rem;
-    font-weight: 700;
-}
-
-.dash-hero__week-controls,
-.dash-hero__right {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-}
-
-.dash-hero__week-controls {
-    margin-top: var(--s-1);
-}
-
-.dash-hero__right {
-    justify-content: flex-end;
-}
-
-.btn-sm {
-    padding: 6px 10px;
-    font-size: 0.875rem;
-}
-
-.btn-inline {
+.employee-hero__pill {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--primary) 8%, white);
+    color: var(--primary);
+    font-weight: 700;
 }
 
-.dashboard-kpis,
-.dashboard-content {
+.employee-hero__actions {
     display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: var(--s-3);
+    align-content: center;
+    min-width: 230px;
 }
 
-.kpi-card {
-    grid-column: span 3;
+.employee-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border-radius: 18px;
+    padding: 18px 22px;
+    font-weight: 700;
+    font-size: 1rem;
+    text-decoration: none;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.employee-cta:hover {
+    transform: translateY(-1px);
+    text-decoration: none;
+}
+
+.employee-cta--primary {
+    background: var(--primary);
+    color: white;
+    box-shadow: 0 12px 24px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.employee-cta--primary:hover {
+    background: var(--primary-hover);
+}
+
+.employee-cta--secondary {
+    background: white;
+    color: var(--primary);
+    border: 1px solid color-mix(in srgb, var(--primary) 16%, white);
+}
+
+.employee-days {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: var(--s-3);
+    align-items: center;
+    padding: 12px;
+    background: color-mix(in srgb, var(--primary-soft) 58%, white);
+}
+
+.employee-days__nav {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: white;
+    color: var(--primary);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+}
+
+.employee-days__nav:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.employee-days__grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.employee-day {
+    padding: 18px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid transparent;
+    text-align: center;
+}
+
+.employee-day--active {
+    background: color-mix(in srgb, var(--primary) 82%, white);
+    color: white;
+    box-shadow: 0 16px 24px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.employee-day--muted {
+    opacity: 0.65;
+}
+
+.employee-day__label,
+.employee-day__value {
+    margin: 0;
+}
+
+.employee-day__label {
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+}
+
+.employee-day__value {
+    margin-top: 12px;
+    font-size: 1.25rem;
+    font-weight: 800;
+}
+
+.employee-grid,
+.manager-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.9fr) minmax(280px, 0.9fr);
+    gap: var(--s-4);
+}
+
+.employee-panel {
     padding: var(--s-4);
+    background: white;
+}
+
+.employee-panel--entries {
+    min-height: 100%;
+}
+
+.employee-side-stack {
+    display: grid;
+    gap: var(--s-4);
+}
+
+.employee-panel__head,
+.manager-panel__head {
     display: flex;
     justify-content: space-between;
     gap: var(--s-3);
     align-items: flex-start;
+    margin-bottom: var(--s-4);
 }
 
-.kpi-card__label {
+.employee-panel__head h2,
+.manager-panel__head h2,
+.manager-hero h1,
+.allocation-item h3,
+.employee-entry__body h3 {
     margin: 0;
-    color: var(--text-2);
-    font-size: 0.82rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+}
+
+.employee-panel__head--compact {
+    margin-bottom: var(--s-3);
+}
+
+.employee-panel__link,
+.employee-panel__review-link {
+    color: var(--primary);
     font-weight: 700;
 }
 
-.kpi-card__value {
-    margin: var(--s-2) 0 var(--s-1) 0;
-    font-size: clamp(1.2rem, 2.2vw, 1.9rem);
-    font-weight: 800;
+.employee-entry-list {
+    display: grid;
+    gap: 12px;
 }
 
-.kpi-card__meta {
-    font-size: 0.9rem;
-    line-height: 1.45;
-}
-
-.kpi-card__icon {
-    width: 58px;
-    height: 58px;
-    border-radius: 16px;
-    display: inline-flex;
+.employee-entry {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: var(--s-3);
     align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
+    padding: 16px 18px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface-2) 55%, white);
 }
 
-.kpi-card__icon--primary {
-    background: var(--primary-soft);
+.employee-entry__icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--primary) 10%, white);
     color: var(--primary);
 }
 
-.kpi-card__icon--info {
-    background: var(--info-soft);
-    color: var(--info);
-}
-
-.kpi-card__icon--accent {
-    background: var(--accent-soft);
-    color: #b6671e;
-}
-
-.kpi-card__icon--neutral {
-    background: var(--surface-2);
+.employee-entry__body p,
+.allocation-item p {
+    margin: 4px 0 0;
     color: var(--text-2);
 }
 
-.kpi-card__icon--success {
-    background: var(--success-soft);
-    color: var(--success);
-}
-
-.kpi-progress {
-    width: 100%;
-    height: 10px;
-    border-radius: var(--r-pill);
-    background: var(--surface-2);
-    overflow: hidden;
-    margin-top: var(--s-3);
-}
-
-.kpi-progress__fill {
-    height: 100%;
-    background: var(--primary);
-    transition: width 500ms ease;
-}
-
-.kpi-badge {
-    display: inline-flex;
-    align-items: center;
-    margin-top: var(--s-2);
-    border-radius: var(--r-pill);
-    padding: 4px 10px;
-    font-size: 0.75rem;
-    font-weight: 700;
-}
-
-.kpi-badge--neutral {
-    background: var(--surface-2);
-    color: var(--text-2);
-}
-
-.kpi-badge--info {
-    background: var(--info-soft);
-    color: var(--info);
-}
-
-.kpi-badge--success {
-    background: var(--success-soft);
-    color: var(--success);
-}
-
-.kpi-badge--warning {
-    background: var(--warning-soft);
-    color: var(--warning);
-}
-
-.report-panel {
-    grid-column: span 4;
-    padding: var(--s-4);
-    display: grid;
-    gap: var(--s-3);
-}
-
-.report-panel--trend {
-    grid-column: span 8;
-}
-
-.report-panel--status {
-    grid-column: span 4;
-}
-
-.dashboard-section-title {
-    margin: 4px 0 0 0;
-    font-size: 1rem;
-}
-
-.report-panel__head {
+.employee-entry__meta {
+    text-align: right;
     display: grid;
     gap: 4px;
 }
 
-.report-panel__head--spread {
-    grid-template-columns: 1fr auto;
-    align-items: start;
-    gap: var(--s-3);
+.employee-entry__meta span {
+    color: var(--text-3);
+    font-size: 0.92rem;
 }
 
-.report-panel__subtitle {
-    font-size: 0.875rem;
-}
-
-.report-panel__helper {
-    font-size: 0.875rem;
-}
-
-.report-panel__helper--active {
-    color: var(--primary);
-    font-weight: 600;
-}
-
-.report-panel__legend {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-2);
-    font-size: 0.95rem;
-}
-
-.report-panel__legend-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 999px;
-    background: var(--primary);
-}
-
-.trend-chart {
-    min-height: 320px;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
-    align-items: end;
-    gap: var(--s-2);
-}
-
-.trend-chart--daily {
-    min-height: 280px;
-}
-
-.trend-chart__item {
-    display: grid;
-    gap: 8px;
-    justify-items: center;
-}
-
-.trend-chart__bar-wrap {
-    width: 100%;
-    height: 210px;
-    border-radius: var(--r-sm);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    display: flex;
-    align-items: end;
-    padding: 6px;
-    overflow: hidden;
-}
-
-.trend-chart__bar {
-    width: 100%;
-    min-height: 12px;
-    border-radius: 8px;
-    background: var(--primary);
-    transform-origin: bottom;
-    animation: bar-rise 420ms ease both;
-}
-
-.trend-chart__value,
-.trend-chart__label {
-    margin: 0;
-    text-align: center;
-}
-
-.trend-chart__value {
-    font-size: 0.78rem;
-}
-
-.trend-chart__label {
-    font-size: 0.78rem;
-    font-weight: 700;
-}
-
-.status-list {
-    display: grid;
-    gap: var(--s-2);
-}
-
-.status-list__item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: var(--s-2);
-    padding: var(--s-3);
-    border-radius: var(--r-sm);
-    border: 1px solid var(--border);
-}
-
-.status-list__item--success {
-    background: var(--success-soft);
-    color: #14532d;
-}
-
-.status-list__item--warning {
-    background: var(--warning-soft);
-    color: #7c2d12;
-}
-
-.status-list__item--neutral {
-    background: var(--surface-2);
-    color: var(--text-1);
-}
-
-.status-list__item--danger {
-    background: var(--danger-soft);
-    color: #7f1d1d;
-}
-
-.status-list__label-wrap,
-.status-list__metrics {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.status-list__icon {
-    width: 30px;
-    height: 30px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.78);
+.employee-entry__status {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-}
-
-.status-list__label {
+    padding: 10px 14px;
+    border-radius: var(--r-pill);
+    font-size: 0.8rem;
     font-weight: 700;
+    min-width: 112px;
 }
 
-.status-list__metrics {
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0;
+.employee-entry__status--draft {
+    background: color-mix(in srgb, var(--primary) 12%, white);
+    color: var(--primary);
 }
 
-.status-list__metrics strong {
-    font-size: 0.95rem;
+.employee-entry__status--submitted {
+    background: color-mix(in srgb, var(--info) 15%, white);
+    color: var(--info);
 }
 
-.status-list__metrics span {
-    font-size: 0.85rem;
-    opacity: 0.8;
+.employee-entry__status--approved {
+    background: color-mix(in srgb, var(--success) 16%, white);
+    color: var(--success);
 }
 
-.rank-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
+.employee-entry__status--warning {
+    background: color-mix(in srgb, var(--warning) 14%, white);
+    color: var(--warning);
+}
+
+.allocation-list {
     display: grid;
-    gap: var(--s-3);
+    gap: 16px;
 }
 
-.rank-list__item {
-    display: grid;
-    gap: 8px;
-}
-
-.rank-list__item--interactive {
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: var(--surface);
-    padding: 4px;
-}
-
-.rank-list__item--active {
-    border-color: var(--primary);
-    box-shadow: inset 0 0 0 1px var(--primary);
-}
-
-.rank-list__button {
-    width: 100%;
-    border: 0;
-    background: transparent;
-    padding: var(--s-2);
-    display: grid;
-    gap: 8px;
-    text-align: left;
-    cursor: pointer;
-}
-
-.rank-list__row {
+.allocation-item__row {
     display: flex;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--s-3);
     align-items: center;
 }
 
-.rank-list__name {
-    font-weight: 600;
-}
-
-.rank-list__value {
-    font-size: 0.95rem;
-}
-
-.rank-list__track {
-    width: 100%;
+.allocation-item__track {
+    margin-top: 12px;
     height: 8px;
     border-radius: var(--r-pill);
-    background: var(--surface-2);
+    background: color-mix(in srgb, var(--primary) 8%, white);
     overflow: hidden;
 }
 
-.rank-list__fill {
+.allocation-item__fill {
     height: 100%;
-    border-radius: var(--r-pill);
-    background: var(--primary);
-    transform-origin: left;
-    animation: bar-fill 600ms ease both;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--primary) 72%, white));
 }
 
-.rank-list__fill--client {
-    background: var(--accent);
+.employee-panel--review {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--primary-soft) 48%, white), white);
+    border-left: 5px solid var(--primary);
 }
 
-.rank-list__cta {
+.employee-panel__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     color: var(--primary);
-    font-size: 0.875rem;
-    font-weight: 600;
-    text-decoration: none;
+    font-weight: 800;
+    margin-bottom: var(--s-3);
 }
 
-.rank-list__cta:hover {
-    text-decoration: underline;
+.employee-panel__review-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: var(--s-3);
 }
 
-.dash-loading {
+.manager-hero,
+.manager-kpis,
+.manager-grid {
+    display: grid;
+    gap: var(--s-4);
+}
+
+.manager-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
     padding: var(--s-5);
 }
 
-@keyframes bar-rise {
-    from {
-        transform: scaleY(0.15);
-        opacity: 0.4;
-    }
-    to {
-        transform: scaleY(1);
-        opacity: 1;
-    }
+.manager-hero__actions,
+.manager-kpis {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-3);
 }
 
-@keyframes bar-fill {
-    from {
-        transform: scaleX(0);
-        opacity: 0.5;
-    }
-    to {
-        transform: scaleX(1);
-        opacity: 1;
-    }
+.manager-kpi {
+    flex: 1 1 220px;
+    padding: var(--s-4);
+    display: grid;
+    gap: 8px;
+}
+
+.manager-kpi p {
+    margin: 0;
+    color: var(--text-2);
+}
+
+.manager-kpi strong {
+    font-size: 2rem;
+}
+
+.manager-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.manager-panel {
+    padding: var(--s-4);
+}
+
+.manager-panel__head span {
+    color: var(--text-3);
+}
+
+.manager-trend {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 12px;
+    min-height: 260px;
+    align-items: end;
+}
+
+.manager-trend__day {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+}
+
+.manager-trend__day span,
+.manager-trend__day strong {
+    font-size: 0.85rem;
+}
+
+.manager-trend__bar-wrap {
+    width: 100%;
+    height: 160px;
+    display: flex;
+    align-items: flex-end;
+}
+
+.manager-trend__bar {
+    width: 100%;
+    border-radius: 16px 16px 6px 6px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 72%, white), var(--primary));
+}
+
+.manager-status-list {
+    display: grid;
+    gap: 12px;
+}
+
+.manager-status-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface-2) 55%, white);
+}
+
+.manager-status-item span {
+    font-weight: 800;
+    color: var(--primary);
 }
 
 @media (max-width: 1100px) {
-    .kpi-card {
-        grid-column: span 6;
+    .employee-grid,
+    .manager-grid {
+        grid-template-columns: 1fr;
     }
 
-    .report-panel--trend,
-    .report-panel--status,
-    .report-panel {
-        grid-column: span 12;
+    .manager-grid {
+        grid-template-columns: 1fr;
     }
 }
 
-@media (max-width: 760px) {
-    .dash-hero {
-        flex-direction: column;
-        align-items: flex-start;
-        padding: var(--s-4);
+@media (max-width: 900px) {
+    .employee-hero,
+    .manager-hero {
+        grid-template-columns: 1fr;
+        display: grid;
     }
 
-    .dash-hero__right {
-        justify-content: flex-start;
+    .employee-hero__actions {
+        min-width: 0;
     }
 
-    .dashboard-kpis,
-    .dashboard-content {
+    .employee-days {
         grid-template-columns: 1fr;
     }
 
-    .kpi-card,
-    .report-panel,
-    .report-panel--trend,
-    .report-panel--status {
+    .employee-days__grid,
+    .manager-trend {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .employee-entry {
+        grid-template-columns: auto 1fr;
+    }
+
+    .employee-entry__meta,
+    .employee-entry__status {
+        grid-column: 2;
+        justify-self: start;
+        text-align: left;
+    }
+}
+
+@media (max-width: 640px) {
+    .employee-days__grid,
+    .manager-trend {
+        grid-template-columns: 1fr;
+    }
+
+    .employee-entry {
+        grid-template-columns: 1fr;
+    }
+
+    .employee-entry__meta,
+    .employee-entry__status {
         grid-column: auto;
-    }
-
-    .report-panel__head--spread {
-        grid-template-columns: 1fr;
-    }
-
-    .trend-chart {
-        grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
-        min-height: 250px;
-    }
-
-    .trend-chart__bar-wrap {
-        height: 160px;
-    }
-
-    .status-list__item {
-        align-items: flex-start;
     }
 }
 </style>
