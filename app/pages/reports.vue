@@ -96,6 +96,24 @@ const totalMinutes = computed(() =>
 const totalHours = computed(() => (totalMinutes.value / 60).toFixed(1))
 const totalEntries = computed(() => filteredRows.value.length)
 const touchedProjects = computed(() => new Set(filteredRows.value.map((r) => r.projectId)).size)
+const representedClients = computed(() => {
+    const clientIds = new Set<string>()
+    for (const row of filteredRows.value) {
+        const clientId = projectById.value.get(row.projectId)?.clientId
+        if (clientId) clientIds.add(clientId)
+    }
+    return clientIds.size
+})
+const avgEntryHours = computed(() => {
+    if (!totalEntries.value) return "0.0"
+    return (totalMinutes.value / 60 / totalEntries.value).toFixed(1)
+})
+const activeFilterCount = computed(() =>
+    [selectedClientId.value, selectedProjectId.value, selectedStatus.value].filter(Boolean).length
+)
+const hasActiveFilters = computed(
+    () => Boolean(activeFilterCount.value || selectedClientId.value || selectedProjectId.value || selectedStatus.value)
+)
 
 const statusCounts = computed(() => {
     const counts = { draft: 0, submitted: 0, approved: 0, rejected: 0 }
@@ -106,6 +124,52 @@ const statusCounts = computed(() => {
         else counts.draft++
     }
     return counts
+})
+
+const totalStatuses = computed(() =>
+    statusCounts.value.draft +
+    statusCounts.value.submitted +
+    statusCounts.value.approved +
+    statusCounts.value.rejected
+)
+
+const statusSummary = computed(() => {
+    const total = totalStatuses.value
+    const items = [
+        {
+            key: "approved",
+            label: "Approved",
+            count: statusCounts.value.approved,
+            icon: "mdi:check-circle",
+            tone: "success",
+        },
+        {
+            key: "submitted",
+            label: "Submitted",
+            count: statusCounts.value.submitted,
+            icon: "mdi:progress-clock",
+            tone: "warning",
+        },
+        {
+            key: "draft",
+            label: "Draft",
+            count: statusCounts.value.draft,
+            icon: "mdi:file-document-edit-outline",
+            tone: "neutral",
+        },
+        {
+            key: "rejected",
+            label: "Rejected",
+            count: statusCounts.value.rejected,
+            icon: "mdi:close-circle",
+            tone: "danger",
+        },
+    ]
+
+    return items.map((item) => ({
+        ...item,
+        percent: total ? Math.round((item.count / total) * 100) : 0,
+    }))
 })
 
 const hoursByProject = computed(() => {
@@ -179,8 +243,13 @@ const weeklyTrend = computed(() => {
     return points.map((point) => ({
         ...point,
         percent: max ? Math.max(8, Math.round((point.minutes / max) * 100)) : 8,
+        shortLabel: formatWeekLabel(point.weekStart),
     }))
 })
+
+const selectedRangeLabel = computed(
+    () => `${formatLongDate(fromWeekStart.value)} – ${formatLongDate(toWeekStart.value)}`
+)
 
 onMounted(() => loadReports())
 
@@ -280,6 +349,25 @@ function formatStatus(status?: number) {
     return "Draft"
 }
 
+function formatLongDate(value: string) {
+    if (!value) return "—"
+    const date = new Date(`${value}T00:00:00`)
+    return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    }).format(date)
+}
+
+function formatWeekLabel(value: string) {
+    if (!value) return "—"
+    const date = new Date(`${value}T00:00:00`)
+    return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+    }).format(date)
+}
+
 function toCsvValue(value: string | number) {
     const text = String(value)
     if (text.includes(",") || text.includes("\"") || text.includes("\n")) {
@@ -356,25 +444,37 @@ function exportDetailedRows() {
 <template>
     <section class="reports">
         <header class="card reports__hero">
-            <div>
+            <div class="reports__hero-copy">
+                <p class="reports__eyebrow">Reporting workspace</p>
                 <h1 class="reports__title">Reports</h1>
                 <p class="reports__subtitle">
-                    Client, project and submission reporting from current timesheet data.
+                    Organization-wide analytics and exports based on current timesheet data.
                 </p>
+                <div class="reports__hero-meta">
+                    <span class="reports__range-pill">
+                        <Icon name="mdi:calendar-range" size="16" />
+                        {{ selectedRangeLabel }}
+                    </span>
+                    <span class="reports__hero-meta-text">{{ filteredRows.length }} filtered entries</span>
+                </div>
             </div>
-            <div class="reports__export-actions">
-                <button type="button" class="btn btn-secondary" @click="exportHoursByClient">
-                    Export clients CSV
-                </button>
-                <button type="button" class="btn btn-secondary" @click="exportHoursByProject">
-                    Export projects CSV
-                </button>
-                <button type="button" class="btn btn-secondary" @click="exportStatusSummary">
-                    Export status CSV
-                </button>
-                <button type="button" class="btn btn-primary" @click="exportDetailedRows">
+
+            <div class="reports__hero-actions">
+                <button type="button" class="btn btn-primary reports__export-main" @click="exportDetailedRows">
+                    <Icon name="mdi:download" size="18" />
                     Export detailed CSV
                 </button>
+                <div class="reports__quick-actions">
+                    <button type="button" class="btn btn-secondary btn-quiet" @click="exportHoursByClient">
+                        Clients CSV
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-quiet" @click="exportHoursByProject">
+                        Projects CSV
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-quiet" @click="exportStatusSummary">
+                        Status CSV
+                    </button>
+                </div>
             </div>
         </header>
 
@@ -384,6 +484,22 @@ function exportDetailedRows() {
         </div>
 
         <section class="card reports__filters">
+            <div class="reports__filters-head">
+                <div>
+                    <p class="reports__section-label">Filters</p>
+                    <h2 class="reports__section-title">Refine the reporting window</h2>
+                </div>
+                <button
+                    type="button"
+                    class="reports__reset"
+                    :disabled="!hasActiveFilters"
+                    @click="resetFilters"
+                >
+                    <Icon name="mdi:refresh" size="18" />
+                    Reset filters
+                </button>
+            </div>
+
             <div class="reports__filter-grid">
                 <label class="reports__field">
                     <span>From week</span>
@@ -422,12 +538,14 @@ function exportDetailedRows() {
                     </select>
                 </label>
                 <div class="reports__filter-actions">
-                    <button type="button" class="btn btn-primary" :disabled="loading" @click="loadReports">
+                    <button type="button" class="btn btn-primary reports__apply" :disabled="loading" @click="loadReports">
+                        <Icon v-if="!loading" name="mdi:check" size="18" />
+                        <Icon v-else name="mdi:loading" size="18" class="spin" />
                         {{ loading ? "Loading..." : "Apply" }}
                     </button>
-                    <button type="button" class="btn btn-secondary" @click="resetFilters">
-                        Reset
-                    </button>
+                    <p class="reports__filter-hint">
+                        {{ activeFilterCount ? `${activeFilterCount} quick filters active` : "Showing all current filters" }}
+                    </p>
                 </div>
             </div>
         </section>
@@ -440,127 +558,174 @@ function exportDetailedRows() {
 
         <template v-else>
             <section class="reports__kpis">
-                <article class="card kpi">
-                    <p class="kpi__label">Total hours</p>
-                    <p class="kpi__value">{{ totalHours }}h</p>
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Total hours</p>
+                        <p class="kpi-card__value">{{ totalHours }}h</p>
+                        <p class="kpi-card__meta">Across {{ filteredRows.length }} entries in the selected range</p>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--primary">
+                        <Icon name="mdi:clock-outline" size="24" />
+                    </span>
                 </article>
-                <article class="card kpi">
-                    <p class="kpi__label">Entries</p>
-                    <p class="kpi__value">{{ totalEntries }}</p>
+
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Entries count</p>
+                        <p class="kpi-card__value">{{ totalEntries }}</p>
+                        <p class="kpi-card__meta">Average {{ avgEntryHours }}h per logged entry</p>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--info">
+                        <Icon name="mdi:file-document-outline" size="24" />
+                    </span>
                 </article>
-                <article class="card kpi">
-                    <p class="kpi__label">Projects touched</p>
-                    <p class="kpi__value">{{ touchedProjects }}</p>
+
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Projects touched</p>
+                        <p class="kpi-card__value">{{ touchedProjects }}</p>
+                        <p class="kpi-card__meta">Spanning {{ representedClients }} client accounts</p>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--accent">
+                        <Icon name="mdi:briefcase-outline" size="24" />
+                    </span>
                 </article>
-                <article class="card kpi">
-                    <p class="kpi__label">Timesheets in range</p>
-                    <p class="kpi__value">{{ filteredTimesheets.length }}</p>
+
+                <article class="card kpi-card">
+                    <div>
+                        <p class="kpi-card__label">Timesheets in range</p>
+                        <p class="kpi-card__value">{{ filteredTimesheets.length }}</p>
+                        <p class="kpi-card__meta">{{ statusCounts.submitted }} currently submitted for review</p>
+                    </div>
+                    <span class="kpi-card__icon kpi-card__icon--neutral">
+                        <Icon name="mdi:calendar-text-outline" size="24" />
+                    </span>
                 </article>
             </section>
 
-            <section class="reports__grid">
-                <article class="card panel">
-                    <header class="panel__head">
-                        <h2>Weekly trend</h2>
+            <section class="reports__content-grid">
+                <article class="card report-panel report-panel--trend">
+                    <header class="report-panel__head report-panel__head--spread">
+                        <div>
+                            <p class="reports__section-label">Trend</p>
+                            <h2 class="reports__section-title">Weekly trend</h2>
+                            <p class="report-panel__subtitle">Weekly totals built from the selected report rows.</p>
+                        </div>
+                        <div class="report-panel__legend">
+                            <span class="report-panel__legend-dot"></span>
+                            Logged time
+                        </div>
                     </header>
-                    <div v-if="weeklyTrend.length" class="trend">
-                        <div v-for="point in weeklyTrend" :key="point.weekStart" class="trend__item">
-                            <div class="trend__bar-wrap">
-                                <div class="trend__bar" :style="{ height: `${point.percent}%` }"></div>
+
+                    <div v-if="weeklyTrend.length" class="trend-chart">
+                        <div v-for="point in weeklyTrend" :key="point.weekStart" class="trend-chart__item">
+                            <p class="trend-chart__value">{{ formatMinutes(point.minutes) }}</p>
+                            <div class="trend-chart__bar-wrap">
+                                <div class="trend-chart__bar" :style="{ height: `${point.percent}%` }"></div>
                             </div>
-                            <p class="trend__value">{{ formatMinutes(point.minutes) }}</p>
-                            <p class="trend__label">{{ point.weekStart }}</p>
+                            <p class="trend-chart__label">{{ point.shortLabel }}</p>
                         </div>
                     </div>
-                    <p v-else class="muted">No data in selected range.</p>
+                    <p v-else class="muted">No data in the selected range.</p>
                 </article>
 
-                <article class="card panel">
-                    <header class="panel__head">
-                        <h2>Hours by employee</h2>
+                <article class="card report-panel report-panel--status">
+                    <header class="report-panel__head">
+                        <p class="reports__section-label">Statuses</p>
+                        <h2 class="reports__section-title">Status summary</h2>
+                        <p class="report-panel__subtitle">Share of timesheets currently visible in this report.</p>
                     </header>
-                    <ul v-if="hoursByEmployee.length" class="list">
-                        <li v-for="item in hoursByEmployee" :key="item.userId" class="list__item">
-                            <div class="list__row">
-                                <span>{{ item.label }}</span>
-                                <strong>{{ formatMinutes(item.minutes) }}</strong>
+
+                    <div class="status-list">
+                        <div v-for="item in statusSummary" :key="item.key" class="status-list__item" :class="`status-list__item--${item.tone}`">
+                            <div class="status-list__label-wrap">
+                                <span class="status-list__icon">
+                                    <Icon :name="item.icon" size="18" />
+                                </span>
+                                <span class="status-list__label">{{ item.label }}</span>
                             </div>
-                            <div class="list__track">
-                                <div
-                                    class="list__fill list__fill--employee"
-                                    :style="{ width: `${item.percent}%` }"
-                                ></div>
+                            <div class="status-list__metrics">
+                                <strong>{{ item.count }}</strong>
+                                <span>{{ item.percent }}%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn btn-secondary report-panel__footer-btn" @click="exportStatusSummary">
+                        Export status CSV
+                    </button>
+                </article>
+
+                <article class="card report-panel">
+                    <header class="report-panel__head">
+                        <p class="reports__section-label">People</p>
+                        <h2 class="reports__section-title">Hours by employee</h2>
+                        <p class="report-panel__subtitle">Top contributors based on the current filters.</p>
+                    </header>
+
+                    <ul v-if="hoursByEmployee.length" class="rank-list">
+                        <li v-for="item in hoursByEmployee" :key="item.userId" class="rank-list__item">
+                            <div class="rank-list__row">
+                                <span class="rank-list__name">{{ item.label }}</span>
+                                <strong class="rank-list__value">{{ formatMinutes(item.minutes) }}</strong>
+                            </div>
+                            <div class="rank-list__track">
+                                <div class="rank-list__fill rank-list__fill--employee" :style="{ width: `${item.percent}%` }"></div>
                             </div>
                         </li>
                     </ul>
                     <p v-else class="muted">No employee activity found.</p>
                 </article>
 
-                <article class="card panel">
-                    <header class="panel__head">
-                        <h2>Hours by client</h2>
+                <article class="card report-panel">
+                    <header class="report-panel__head">
+                        <p class="reports__section-label">Clients</p>
+                        <h2 class="reports__section-title">Hours by client</h2>
+                        <p class="report-panel__subtitle">Client totals grouped from matching project activity.</p>
                     </header>
-                    <ul v-if="hoursByClient.length" class="list">
-                        <li v-for="item in hoursByClient" :key="item.clientId" class="list__item">
-                            <div class="list__row">
-                                <span>{{ item.label }}</span>
-                                <strong>{{ formatMinutes(item.minutes) }}</strong>
+
+                    <ul v-if="hoursByClient.length" class="rank-list">
+                        <li v-for="item in hoursByClient" :key="item.clientId" class="rank-list__item">
+                            <div class="rank-list__row">
+                                <span class="rank-list__name">{{ item.label }}</span>
+                                <strong class="rank-list__value">{{ formatMinutes(item.minutes) }}</strong>
                             </div>
-                            <div class="list__track">
-                                <div class="list__fill list__fill--client" :style="{ width: `${item.percent}%` }"></div>
+                            <div class="rank-list__track">
+                                <div class="rank-list__fill rank-list__fill--client" :style="{ width: `${item.percent}%` }"></div>
                             </div>
                         </li>
                     </ul>
                     <p v-else class="muted">No client activity found.</p>
+
+                    <button type="button" class="btn btn-secondary report-panel__footer-btn" @click="exportHoursByClient">
+                        Export client CSV
+                    </button>
                 </article>
 
-                <article class="card panel">
-                    <header class="panel__head">
-                        <h2>Hours by project</h2>
+                <article class="card report-panel">
+                    <header class="report-panel__head">
+                        <p class="reports__section-label">Projects</p>
+                        <h2 class="reports__section-title">Hours by project</h2>
+                        <p class="report-panel__subtitle">Project totals calculated from the selected entry set.</p>
                     </header>
-                    <ul v-if="hoursByProject.length" class="list">
-                        <li v-for="item in hoursByProject" :key="item.projectId" class="list__item">
-                            <div class="list__row">
-                                <span>{{ item.label }}</span>
-                                <strong>{{ formatMinutes(item.minutes) }}</strong>
+
+                    <ul v-if="hoursByProject.length" class="rank-list">
+                        <li v-for="item in hoursByProject" :key="item.projectId" class="rank-list__item">
+                            <div class="rank-list__row">
+                                <span class="rank-list__name">{{ item.label }}</span>
+                                <strong class="rank-list__value">{{ formatMinutes(item.minutes) }}</strong>
                             </div>
-                            <div class="list__track">
-                                <div class="list__fill" :style="{ width: `${item.percent}%` }"></div>
+                            <div class="rank-list__track">
+                                <div class="rank-list__fill" :style="{ width: `${item.percent}%` }"></div>
                             </div>
                         </li>
                     </ul>
                     <p v-else class="muted">No project activity found.</p>
+
+                    <button type="button" class="btn btn-secondary report-panel__footer-btn" @click="exportHoursByProject">
+                        Export project CSV
+                    </button>
                 </article>
-            </section>
-
-            <section class="card reports__status">
-                <header class="panel__head">
-                    <h2>Timesheet status summary</h2>
-                </header>
-                <div class="status-grid">
-                    <div class="status-cell">
-                        <span>Draft</span>
-                        <strong>{{ statusCounts.draft }}</strong>
-                    </div>
-                    <div class="status-cell">
-                        <span>Submitted</span>
-                        <strong>{{ statusCounts.submitted }}</strong>
-                    </div>
-                    <div class="status-cell">
-                        <span>Approved</span>
-                        <strong>{{ statusCounts.approved }}</strong>
-                    </div>
-                    <div class="status-cell">
-                        <span>Rejected</span>
-                        <strong>{{ statusCounts.rejected }}</strong>
-                    </div>
-                </div>
-            </section>
-
-            <section class="card reports__note">
-                <p class="muted">
-                    Team-wide reports are shown using org-level timesheets for the selected date range.
-                </p>
             </section>
         </template>
     </section>
@@ -577,27 +742,125 @@ function exportDetailedRows() {
     display: flex;
     justify-content: space-between;
     gap: var(--s-4);
-    align-items: flex-end;
+    align-items: flex-start;
+}
+
+.reports__hero-copy {
+    display: grid;
+    gap: var(--s-2);
+}
+
+.reports__eyebrow,
+.reports__section-label {
+    margin: 0;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-3);
+    font-weight: 700;
 }
 
 .reports__title {
     margin: 0;
-    font-size: 1.5rem;
+    font-size: clamp(1.8rem, 4vw, 2.35rem);
+    line-height: 1.05;
 }
 
 .reports__subtitle {
-    margin: var(--s-1) 0 0 0;
+    margin: 0;
+    max-width: 60ch;
     color: var(--text-2);
 }
 
-.reports__export-actions {
+.reports__hero-meta {
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+    align-items: center;
+}
+
+.reports__range-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: var(--r-pill);
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-size: 0.875rem;
+    font-weight: 700;
+}
+
+.reports__hero-meta-text {
+    color: var(--text-2);
+    font-size: 0.95rem;
+}
+
+.reports__hero-actions {
+    display: grid;
+    gap: var(--s-2);
+    justify-items: end;
+    min-width: min(100%, 290px);
+}
+
+.reports__export-main,
+.reports__apply,
+.reports__reset,
+.report-panel__footer-btn,
+.btn-quiet {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.reports__export-main {
+    width: 100%;
+}
+
+.reports__quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--s-2);
+}
+
+.btn-quiet {
+    padding-inline: 12px;
 }
 
 .reports__filters {
     padding: var(--s-4);
+    display: grid;
+    gap: var(--s-4);
+}
+
+.reports__filters-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s-3);
+    align-items: start;
+}
+
+.reports__section-title {
+    margin: 4px 0 0 0;
+    font-size: 1.4rem;
+}
+
+.reports__reset {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-2);
+    border-radius: var(--r-sm);
+    padding: 10px 14px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.reports__reset:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
 }
 
 .reports__filter-grid {
@@ -610,18 +873,39 @@ function exportDetailedRows() {
 .reports__field {
     display: flex;
     flex-direction: column;
-    gap: var(--s-1);
+    gap: 6px;
 }
 
 .reports__field span {
     font-size: 0.8rem;
     color: var(--text-2);
-    font-weight: 600;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.reports__field :is(input, select) {
+    min-height: 44px;
 }
 
 .reports__filter-actions {
-    display: flex;
+    display: grid;
     gap: var(--s-2);
+    align-self: stretch;
+}
+
+.reports__apply {
+    min-height: 44px;
+}
+
+.reports__filter-hint {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 0.875rem;
+}
+
+.reports__loading {
+    padding: var(--s-4);
 }
 
 .reports__kpis {
@@ -630,111 +914,268 @@ function exportDetailedRows() {
     gap: var(--s-3);
 }
 
-.kpi {
+.kpi-card {
     grid-column: span 3;
     padding: var(--s-4);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s-3);
+    align-items: flex-start;
 }
 
-.kpi__label {
+.kpi-card__label {
     margin: 0;
-    font-size: 0.8rem;
     color: var(--text-2);
+    font-size: 0.82rem;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     font-weight: 700;
 }
 
-.kpi__value {
-    margin: var(--s-2) 0 0 0;
-    font-size: 1.6rem;
+.kpi-card__value {
+    margin: var(--s-2) 0 var(--s-1) 0;
+    font-size: clamp(1.75rem, 2.8vw, 2.2rem);
     font-weight: 800;
 }
 
-.reports__grid {
+.kpi-card__meta {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 0.9rem;
+    line-height: 1.45;
+}
+
+.kpi-card__icon {
+    width: 58px;
+    height: 58px;
+    border-radius: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.kpi-card__icon--primary {
+    background: var(--primary-soft);
+    color: var(--primary);
+}
+
+.kpi-card__icon--info {
+    background: var(--info-soft);
+    color: var(--info);
+}
+
+.kpi-card__icon--accent {
+    background: var(--accent-soft);
+    color: #b6671e;
+}
+
+.kpi-card__icon--neutral {
+    background: var(--surface-2);
+    color: var(--text-2);
+}
+
+.reports__content-grid {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: var(--s-3);
 }
 
-.panel {
+.report-panel {
+    grid-column: span 4;
     padding: var(--s-4);
-}
-
-.reports__grid > .panel:nth-child(1) {
-    grid-column: span 6;
-}
-
-.reports__grid > .panel:nth-child(2),
-.reports__grid > .panel:nth-child(3),
-.reports__grid > .panel:nth-child(4) {
-    grid-column: span 6;
-}
-
-.panel__head h2 {
-    margin: 0;
-    font-size: 1rem;
-}
-
-.trend {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-    gap: var(--s-2);
+    gap: var(--s-3);
 }
 
-.trend__item {
+.report-panel--trend {
+    grid-column: span 8;
+}
+
+.report-panel--status {
+    grid-column: span 4;
+}
+
+.report-panel__head {
     display: grid;
-    justify-items: center;
     gap: 4px;
 }
 
-.trend__bar-wrap {
+.report-panel__head--spread {
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    gap: var(--s-3);
+}
+
+.report-panel__subtitle {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 0.925rem;
+}
+
+.report-panel__legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-2);
+    font-size: 0.95rem;
+}
+
+.report-panel__legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.trend-chart {
+    min-height: 320px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+    align-items: end;
+    gap: var(--s-2);
+}
+
+.trend-chart__item {
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+}
+
+.trend-chart__bar-wrap {
     width: 100%;
-    height: 120px;
-    border-radius: var(--r-sm);
-    background: var(--surface-2);
+    height: 220px;
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(242, 244, 250, 0.7), var(--surface-2));
     display: flex;
     align-items: end;
-    padding: 4px;
+    padding: 6px;
+    overflow: hidden;
 }
 
-.trend__bar {
+.trend-chart__bar {
     width: 100%;
-    background: var(--primary);
-    border-radius: 8px;
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(15, 118, 110, 0.88), var(--primary));
+    min-height: 12px;
+    transition: height 320ms ease;
 }
 
-.trend__value,
-.trend__label {
+.trend-chart__value,
+.trend-chart__label {
     margin: 0;
-    font-size: 0.75rem;
+    text-align: center;
 }
 
-.trend__value {
+.trend-chart__value {
     color: var(--text-2);
+    font-size: 0.78rem;
 }
 
-.list {
+.trend-chart__label {
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.status-list {
+    display: grid;
+    gap: var(--s-2);
+}
+
+.status-list__item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s-2);
+    padding: 14px 16px;
+    border-radius: 14px;
+}
+
+.status-list__item--success {
+    background: var(--success-soft);
+    color: #14532d;
+}
+
+.status-list__item--warning {
+    background: var(--warning-soft);
+    color: #7c2d12;
+}
+
+.status-list__item--neutral {
+    background: var(--surface-2);
+    color: var(--text-1);
+}
+
+.status-list__item--danger {
+    background: var(--danger-soft);
+    color: #7f1d1d;
+}
+
+.status-list__label-wrap,
+.status-list__metrics {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.status-list__icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.status-list__label {
+    font-weight: 700;
+}
+
+.status-list__metrics {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+}
+
+.status-list__metrics strong {
+    font-size: 1.05rem;
+}
+
+.status-list__metrics span {
+    font-size: 0.85rem;
+    opacity: 0.8;
+}
+
+.rank-list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
-    gap: var(--s-2);
+    gap: var(--s-3);
 }
 
-.list__item {
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    padding: var(--s-2);
+.rank-list__item {
+    display: grid;
+    gap: 8px;
 }
 
-.list__row {
+.rank-list__row {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 6px;
     gap: var(--s-2);
+    align-items: center;
 }
 
-.list__track {
+.rank-list__name {
+    font-weight: 600;
+}
+
+.rank-list__value {
+    font-size: 0.95rem;
+}
+
+.rank-list__track {
     width: 100%;
     height: 8px;
     border-radius: var(--r-pill);
@@ -742,50 +1183,23 @@ function exportDetailedRows() {
     overflow: hidden;
 }
 
-.list__fill {
+.rank-list__fill {
     height: 100%;
+    border-radius: var(--r-pill);
     background: var(--primary);
 }
 
-.list__fill--client {
+.rank-list__fill--client {
     background: var(--accent);
 }
 
-.list__fill--employee {
-    background: var(--success, #22c55e);
+.rank-list__fill--employee {
+    background: var(--info);
 }
 
-.reports__status {
-    padding: var(--s-4);
-}
-
-.status-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--s-3);
-}
-
-.status-cell {
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    padding: var(--s-3);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.status-cell span {
-    color: var(--text-2);
-    font-size: 0.875rem;
-}
-
-.status-cell strong {
-    font-size: 1.2rem;
-}
-
-.reports__note,
-.reports__loading {
-    padding: var(--s-4);
+.report-panel__footer-btn {
+    margin-top: auto;
+    width: 100%;
 }
 
 .muted {
@@ -793,33 +1207,81 @@ function exportDetailedRows() {
     color: var(--text-2);
 }
 
-@media (max-width: 1100px) {
+.spin {
+    animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 1180px) {
     .reports__filter-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    .kpi,
-    .reports__grid > .panel:nth-child(1),
-    .reports__grid > .panel:nth-child(2),
-    .reports__grid > .panel:nth-child(3),
-    .reports__grid > .panel:nth-child(4) {
+    .kpi-card {
+        grid-column: span 6;
+    }
+
+    .report-panel--trend,
+    .report-panel--status,
+    .report-panel {
         grid-column: span 12;
     }
 }
 
 @media (max-width: 760px) {
-    .reports__hero {
-        flex-direction: column;
-        align-items: flex-start;
+    .reports__hero,
+    .reports__filters {
         padding: var(--s-4);
     }
 
-    .reports__filter-grid {
+    .reports__hero,
+    .reports__filters-head {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .reports__hero-actions,
+    .reports__quick-actions {
+        justify-items: stretch;
+        justify-content: flex-start;
+    }
+
+    .reports__filter-grid,
+    .reports__kpis,
+    .reports__content-grid {
         grid-template-columns: 1fr;
     }
 
-    .status-grid {
+    .kpi-card,
+    .report-panel,
+    .report-panel--trend,
+    .report-panel--status {
+        grid-column: auto;
+    }
+
+    .report-panel__head--spread {
         grid-template-columns: 1fr;
+    }
+
+    .trend-chart {
+        grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+        min-height: 260px;
+    }
+
+    .trend-chart__bar-wrap {
+        height: 170px;
+    }
+
+    .status-list__item {
+        align-items: flex-start;
     }
 }
 </style>
