@@ -2,6 +2,7 @@
 definePageMeta({ middleware: ["auth"] })
 
 import { computed, onMounted, ref } from "vue"
+import { useRoute } from "vue-router"
 import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { clientsApi, type Client } from "~/api/clientsApi"
@@ -30,6 +31,7 @@ const toWeekStart = ref(nowWeekStart)
 const selectedClientId = ref("")
 const selectedProjectId = ref("")
 const selectedStatus = ref("")
+const route = useRoute()
 
 const projectById = computed(() => {
     const map = new Map<string, Project>()
@@ -208,6 +210,10 @@ async function loadReports() {
         projects.value = projectsResult
         clients.value = clientsResult
         timesheets.value = sheets
+        const clientIdFromQuery = typeof route.query.clientId === "string" ? route.query.clientId : ""
+        if (clientIdFromQuery && clientsResult.some((client) => client.id === clientIdFromQuery)) {
+            selectedClientId.value = clientIdFromQuery
+        }
 
         const entryGroups = await Promise.all(
             sheets.map(async (sheet) => {

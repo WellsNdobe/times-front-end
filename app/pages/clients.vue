@@ -1,10 +1,18 @@
 <script setup lang="ts">
 definePageMeta({ middleware: ["auth"] })
 
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { organizationsApi, type Organization } from "~/api/organizationsApi"
 import { clientsApi, type Client, type CreateClientRequest } from "~/api/clientsApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
+
+type ClientUiOverride = {
+    industry: string
+    domain: string
+    totalProjects: number
+    totalBillable: number
+    isActive: boolean
+}
 
 const org = ref<Organization | null>(null)
 const clients = ref<Client[]>([])
@@ -12,35 +20,31 @@ const loading = ref(true)
 const error = ref<UiError | null>(null)
 
 const showAddForm = ref(false)
-const addForm = ref({ name: "" })
+const addForm = ref({
+    name: "",
+    domain: "",
+    industry: "",
+    totalProjects: 1,
+    totalBillable: 0,
+    isActive: true,
+})
 const addLoading = ref(false)
 const addError = ref<UiError | null>(null)
 const search = ref("")
 const activeTab = ref<"all" | "active" | "inactive">("all")
+const showFilters = ref(false)
+const selectedIndustry = ref("")
+const page = ref(1)
+const pageSize = 8
+const openMenuClientId = ref("")
 
-const BILLABLE_RATE = 185
+const clientUiOverrides = ref<Record<string, ClientUiOverride>>({})
+
 const tabOptions = [
     { value: "all", label: "All" },
     { value: "active", label: "Active" },
     { value: "inactive", label: "Inactive" },
 ] as const
-const FALLBACK_CLIENT_BILLABLES = [42500, 28900, 36150, 51200, 18750, 22400]
-const FALLBACK_DOMAINS = [
-    "nexus-ventures.com",
-    "aetherlabs.io",
-    "northstar-logistics.com",
-    "bluepeakcap.com",
-    "solsticehealth.co",
-    "harborretail.com",
-]
-const FALLBACK_INDUSTRIES = [
-    "Financial Services",
-    "Biotechnology",
-    "Logistics",
-    "Private Equity",
-    "Healthcare",
-    "Retail",
-]
 
 const organizationId = computed(() => org.value?.id ?? "")
 
@@ -49,16 +53,25 @@ const sortedClients = computed(() =>
 )
 
 const clientRows = computed(() =>
-    sortedClients.value.map((client, index) => {
+    sortedClients.value.map((client) => {
         const words = (client.name ?? "Client").split(/\s+/).filter(Boolean)
         const initials = words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "").join("") || "CL"
-        const status = client.isActive === false ? "Inactive" : "Active"
-        const totalProjects = Math.max(3, 12 - index * 2)
-        const totalBillable = FALLBACK_CLIENT_BILLABLES[index] ?? Math.max(12500, 46000 - index * 3200)
+        const override = clientUiOverrides.value[client.id]
+        const status = (override?.isActive ?? client.isActive ?? true) ? "Active" : "Inactive"
+        const totalProjects =
+            override?.totalProjects ??
+            toPositiveNumber((client as Record<string, unknown>).totalProjects, 0)
+        const totalBillable =
+            override?.totalBillable ??
+            toPositiveNumber((client as Record<string, unknown>).totalBillable, 0)
         const domain =
-            FALLBACK_DOMAINS[index] ??
-            `${(client.name ?? "client").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}.com`
-        const industry = FALLBACK_INDUSTRIES[index] ?? "Professional Services"
+            override?.domain ??
+            toNonEmptyString((client as Record<string, unknown>).domain) ??
+            ""
+        const industry =
+            override?.industry ??
+            toNonEmptyString((client as Record<string, unknown>).industry) ??
+            ""
 
         return {
             ...client,
@@ -72,6 +85,14 @@ const clientRows = computed(() =>
     })
 )
 
+const uniqueIndustries = computed(() => {
+    const items = new Set<string>()
+    for (const client of clientRows.value) {
+        if (client.industry) items.add(client.industry)
+    }
+    return [...items].sort((a, b) => a.localeCompare(b))
+})
+
 const filteredClients = computed(() => {
     const needle = search.value.trim().toLowerCase()
 
@@ -80,25 +101,49 @@ const filteredClients = computed(() => {
             activeTab.value === "all" ||
             (activeTab.value === "active" && client.status === "Active") ||
             (activeTab.value === "inactive" && client.status === "Inactive")
-
+        const matchesIndustry = !selectedIndustry.value || client.industry === selectedIndustry.value
         const matchesSearch =
             !needle ||
             [client.name, client.industry, client.domain, client.status]
                 .filter(Boolean)
                 .some((value) => String(value).toLowerCase().includes(needle))
 
-        return matchesTab && matchesSearch
+        return matchesTab && matchesIndustry && matchesSearch
     })
 })
 
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredClients.value.length / pageSize)))
+const paginatedClients = computed(() => {
+    const start = (page.value - 1) * pageSize
+    return filteredClients.value.slice(start, start + pageSize)
+})
+const pageNumbers = computed(() => Array.from({ length: totalPages.value }, (_, index) => index + 1))
+
 const hasClients = computed(() => sortedClients.value.length > 0)
+const averageBillable = computed(() => {
+    const billableClients = clientRows.value.filter((client) => client.totalBillable > 0)
+    if (!billableClients.length) return 0
+    const total = billableClients.reduce((sum, client) => sum + client.totalBillable, 0)
+    return total / billableClients.length
+})
 const activeClientsCount = computed(
     () => clientRows.value.filter((client) => client.status === "Active").length
 )
 const totalProjects = computed(() => clientRows.value.reduce((sum, client) => sum + client.totalProjects, 0))
 const totalRevenue = computed(() => clientRows.value.reduce((sum, client) => sum + client.totalBillable, 0))
-const visibleStart = computed(() => (filteredClients.value.length ? 1 : 0))
-const visibleEnd = computed(() => filteredClients.value.length)
+const visibleStart = computed(() => (paginatedClients.value.length ? (page.value - 1) * pageSize + 1 : 0))
+const visibleEnd = computed(() =>
+    paginatedClients.value.length ? visibleStart.value + paginatedClients.value.length - 1 : 0
+)
+
+watch([search, activeTab, selectedIndustry], () => {
+    page.value = 1
+    openMenuClientId.value = ""
+})
+
+watch(totalPages, (next) => {
+    if (page.value > next) page.value = next
+})
 
 async function loadClients() {
     loading.value = true
@@ -112,6 +157,7 @@ async function loadClients() {
         const firstOrg = orgs[0]
         if (!firstOrg) return
         org.value = firstOrg
+        loadClientOverrides()
         if (!org.value?.id) return
         clients.value = await clientsApi.list(org.value.id)
     } catch (e) {
@@ -134,6 +180,8 @@ async function onAddClient() {
         return
     }
     const name = addForm.value.name.trim()
+    const domain = addForm.value.domain.trim().toLowerCase()
+    const industry = addForm.value.industry.trim()
     if (!name) {
         addError.value = {
             title: "Missing name",
@@ -141,20 +189,203 @@ async function onAddClient() {
         }
         return
     }
+    if (!domain) {
+        addError.value = {
+            title: "Missing domain",
+            message: "Enter a domain before saving.",
+        }
+        return
+    }
+    if (!industry) {
+        addError.value = {
+            title: "Missing industry",
+            message: "Enter an industry before saving.",
+        }
+        return
+    }
+    if (!Number.isFinite(addForm.value.totalProjects) || addForm.value.totalProjects < 1) {
+        addError.value = {
+            title: "Invalid total projects",
+            message: "Total projects must be at least 1.",
+        }
+        return
+    }
+    if (!Number.isFinite(addForm.value.totalBillable) || addForm.value.totalBillable < 0) {
+        addError.value = {
+            title: "Invalid total billable",
+            message: "Total billable must be 0 or more.",
+        }
+        return
+    }
 
     addLoading.value = true
     try {
         const payload: CreateClientRequest = { name }
-        await clientsApi.create(organizationId.value, payload)
-        addForm.value = { name: "" }
-        showAddForm.value = false
+        const created = await clientsApi.create(organizationId.value, payload)
         await loadClients()
+        const createdClientId =
+            created?.id ??
+            clients.value.find((client) => client.name?.trim().toLowerCase() === name.toLowerCase())?.id ??
+            ""
+        if (createdClientId) {
+            clientUiOverrides.value[createdClientId] = {
+                domain,
+                industry,
+                totalProjects: Math.floor(addForm.value.totalProjects),
+                totalBillable: Number(addForm.value.totalBillable),
+                isActive: addForm.value.isActive,
+            }
+            persistClientOverrides()
+        }
+
+        addForm.value = {
+            name: "",
+            domain: "",
+            industry: "",
+            totalProjects: 1,
+            totalBillable: 0,
+            isActive: true,
+        }
+        showAddForm.value = false
     } catch (e) {
         console.error("Create client error:", e)
         addError.value = toUiError(e)
     } finally {
         addLoading.value = false
     }
+}
+
+function toggleClientMenu(clientId: string) {
+    openMenuClientId.value = openMenuClientId.value === clientId ? "" : clientId
+}
+
+function toggleClientStatus(
+    client: Client & {
+        status: string
+        industry: string
+        domain: string
+        totalProjects: number
+        totalBillable: number
+    }
+) {
+    clientUiOverrides.value[client.id] = {
+        domain: client.domain,
+        industry: client.industry,
+        totalProjects: client.totalProjects,
+        totalBillable: client.totalBillable,
+        isActive: client.status !== "Active",
+    }
+    persistClientOverrides()
+    openMenuClientId.value = ""
+}
+
+function goToClientReports(clientId: string) {
+    openMenuClientId.value = ""
+    void navigateTo({ path: "/reports", query: { clientId } })
+}
+
+function toggleFilters() {
+    showFilters.value = !showFilters.value
+}
+
+function clearExtraFilters() {
+    selectedIndustry.value = ""
+    showFilters.value = false
+}
+
+function goToPage(nextPage: number) {
+    if (nextPage < 1 || nextPage > totalPages.value) return
+    page.value = nextPage
+}
+
+function previousPage() {
+    goToPage(page.value - 1)
+}
+
+function nextPage() {
+    goToPage(page.value + 1)
+}
+
+function exportVisibleClientsCsv() {
+    const lines = filteredClients.value.map((client) => [
+        client.name ?? "",
+        client.domain,
+        client.industry,
+        client.totalProjects,
+        client.totalBillable,
+        client.status,
+    ])
+
+    const csv = [
+        ["client_name", "domain", "industry", "total_projects", "total_billable", "status"],
+        ...lines,
+    ]
+        .map((line) => line.map((value) => toCsvValue(value)).join(","))
+        .join("\n")
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.setAttribute("download", "clients.csv")
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+}
+
+function toPositiveNumber(value: unknown, fallback: number) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value
+    if (typeof value === "string") {
+        const parsed = Number(value)
+        if (Number.isFinite(parsed) && parsed >= 0) return parsed
+    }
+    return fallback
+}
+
+function toNonEmptyString(value: unknown) {
+    if (typeof value !== "string") return null
+    const trimmed = value.trim()
+    return trimmed ? trimmed : null
+}
+
+function toCsvValue(value: string | number) {
+    const text = String(value)
+    if (text.includes(",") || text.includes("\"") || text.includes("\n")) {
+        return `"${text.replaceAll("\"", "\"\"")}"`
+    }
+    return text
+}
+
+function overrideStorageKey() {
+    if (!organizationId.value) return ""
+    return `clients-ui-overrides:${organizationId.value}`
+}
+
+function loadClientOverrides() {
+    if (typeof window === "undefined") return
+    const key = overrideStorageKey()
+    if (!key) return
+    try {
+        const raw = window.localStorage.getItem(key)
+        if (!raw) {
+            clientUiOverrides.value = {}
+            return
+        }
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === "object") {
+            clientUiOverrides.value = parsed as Record<string, ClientUiOverride>
+        }
+    } catch {
+        clientUiOverrides.value = {}
+    }
+}
+
+function persistClientOverrides() {
+    if (typeof window === "undefined") return
+    const key = overrideStorageKey()
+    if (!key) return
+    window.localStorage.setItem(key, JSON.stringify(clientUiOverrides.value))
 }
 
 function formatCurrency(value: number) {
@@ -210,6 +441,37 @@ function formatCompactCurrency(value: number) {
                             autocomplete="off"
                         />
                     </label>
+                    <label class="form-field">
+                        <span class="form-field__label">Domain</span>
+                        <input v-model.trim="addForm.domain" type="text" required placeholder="acme.com" autocomplete="off" />
+                    </label>
+                    <label class="form-field">
+                        <span class="form-field__label">Industry</span>
+                        <input
+                            v-model.trim="addForm.industry"
+                            type="text"
+                            required
+                            placeholder="Professional Services"
+                            autocomplete="off"
+                        />
+                    </label>
+                    <label class="form-field">
+                        <span class="form-field__label">Total projects</span>
+                        <input v-model.number="addForm.totalProjects" type="number" min="1" required />
+                    </label>
+                    <label class="form-field">
+                        <span class="form-field__label">Total billable</span>
+                        <input v-model.number="addForm.totalBillable" type="number" min="0" step="0.01" required />
+                    </label>
+                    <label class="form-field">
+                        <span class="form-field__label">Status</span>
+                        <select v-model="addForm.isActive" required>
+                            <option :value="true">Active</option>
+                            <option :value="false">Inactive</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="clients-add-form__actions">
                     <button type="submit" class="btn btn-primary" :disabled="addLoading">
                         {{ addLoading ? "Saving..." : "Save client" }}
                     </button>
@@ -240,8 +502,8 @@ function formatCompactCurrency(value: number) {
                     <article class="stat-card">
                         <p class="stat-card__label">Avg. Billable</p>
                         <div class="stat-card__value-row stat-card__value-row--split">
-                            <strong class="stat-card__value">${{ BILLABLE_RATE }}/hr</strong>
-                            <span class="stat-card__meta">Platform Avg</span>
+                            <strong class="stat-card__value">{{ formatCompactCurrency(averageBillable) }}</strong>
+                            <span class="stat-card__meta">Client Avg</span>
                         </div>
                     </article>
 
@@ -287,20 +549,48 @@ function formatCompactCurrency(value: number) {
                                     :disabled="!hasClients"
                                 />
                             </label>
-                            <button type="button" class="clients-toolbar__button">
+                            <button
+                                type="button"
+                                class="clients-toolbar__button"
+                                :disabled="!hasClients"
+                                @click="toggleFilters"
+                            >
                                 <Icon name="mdi:filter-variant" size="18" />
-                                <span>More Filters</span>
+                                <span>{{ showFilters ? "Hide Filters" : "More Filters" }}</span>
                             </button>
-                            <button type="button" class="clients-toolbar__button">
+                            <button
+                                type="button"
+                                class="clients-toolbar__button"
+                                :disabled="!hasClients"
+                                @click="exportVisibleClientsCsv"
+                            >
                                 <Icon name="mdi:export-variant" size="18" />
                                 <span>Export</span>
                             </button>
                         </div>
                     </div>
 
+                    <div v-if="showFilters" class="clients-filters">
+                        <label class="form-field">
+                            <span class="form-field__label">Industry</span>
+                            <select v-model="selectedIndustry">
+                                <option value="">All industries</option>
+                                <option v-for="industry in uniqueIndustries" :key="industry" :value="industry">
+                                    {{ industry }}
+                                </option>
+                            </select>
+                        </label>
+                        <button type="button" class="btn btn-secondary" @click="clearExtraFilters">Clear filters</button>
+                    </div>
+
                     <div v-if="!sortedClients.length" class="clients-empty">
                         <h2>No clients yet</h2>
                         <p>Add your first client so projects can be linked for reporting.</p>
+                    </div>
+
+                    <div v-else-if="!filteredClients.length" class="clients-empty">
+                        <h2>No matching clients</h2>
+                        <p>Try adjusting search or filters.</p>
                     </div>
 
                     <template v-else>
@@ -318,7 +608,7 @@ function formatCompactCurrency(value: number) {
 
                             <div class="clients-table__body" role="rowgroup">
                                 <div
-                                    v-for="client in filteredClients"
+                                    v-for="client in paginatedClients"
                                     :key="client.id"
                                     class="clients-table__row"
                                     role="row"
@@ -332,7 +622,9 @@ function formatCompactCurrency(value: number) {
                                     </div>
                                     <p class="clients-table__industry" role="cell">{{ client.industry }}</p>
                                     <p role="cell">{{ client.totalProjects }}</p>
-                                    <p role="cell">{{ formatCurrency(client.totalBillable) }}</p>
+                                    <p role="cell">
+                                        {{ formatCurrency(client.totalBillable) }}
+                                    </p>
                                     <div role="cell">
                                         <span
                                             class="clients-table__status"
@@ -344,12 +636,30 @@ function formatCompactCurrency(value: number) {
                                         </span>
                                     </div>
                                     <div class="clients-table__actions" role="cell">
-                                        <button type="button" class="clients-table__icon-button" aria-label="View client">
+                                        <button
+                                            type="button"
+                                            class="clients-table__icon-button"
+                                            aria-label="View client"
+                                            @click="goToClientReports(client.id)"
+                                        >
                                             <Icon name="mdi:eye-outline" size="18" />
                                         </button>
-                                        <button type="button" class="clients-table__icon-button" aria-label="More options">
-                                            <Icon name="mdi:dots-horizontal" size="18" />
-                                        </button>
+                                        <div class="clients-table__menu">
+                                            <button
+                                                type="button"
+                                                class="clients-table__icon-button"
+                                                aria-label="More options"
+                                                @click="toggleClientMenu(client.id)"
+                                            >
+                                                <Icon name="mdi:dots-horizontal" size="18" />
+                                            </button>
+                                            <div v-if="openMenuClientId === client.id" class="clients-table__menu-panel">
+                                                <button type="button" @click="goToClientReports(client.id)">Open reports</button>
+                                                <button type="button" @click="toggleClientStatus(client)">
+                                                    {{ client.status === "Active" ? "Mark inactive" : "Mark active" }}
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -358,20 +668,36 @@ function formatCompactCurrency(value: number) {
                         <footer class="clients-footer">
                             <p>
                                 Showing {{ visibleStart }} to {{ visibleEnd }} of
-                                {{ sortedClients.length }} clients
+                                {{ filteredClients.length }} matching clients
                             </p>
 
                             <div class="clients-pagination" aria-label="Pagination">
-                                <button type="button" class="clients-pagination__button">Previous</button>
                                 <button
                                     type="button"
-                                    class="clients-pagination__button clients-pagination__button--active"
+                                    class="clients-pagination__button"
+                                    :disabled="page === 1"
+                                    @click="previousPage"
                                 >
-                                    1
+                                    Previous
                                 </button>
-                                <button type="button" class="clients-pagination__button">2</button>
-                                <button type="button" class="clients-pagination__button">3</button>
-                                <button type="button" class="clients-pagination__button">Next</button>
+                                <button
+                                    v-for="n in pageNumbers"
+                                    :key="n"
+                                    type="button"
+                                    class="clients-pagination__button"
+                                    :class="{ 'clients-pagination__button--active': page === n }"
+                                    @click="goToPage(n)"
+                                >
+                                    {{ n }}
+                                </button>
+                                <button
+                                    type="button"
+                                    class="clients-pagination__button"
+                                    :disabled="page === totalPages"
+                                    @click="nextPage"
+                                >
+                                    Next
+                                </button>
                             </div>
                         </footer>
                     </template>
@@ -403,15 +729,15 @@ function formatCompactCurrency(value: number) {
 
 .clients-hero__title {
     margin: 0;
-    font-size: clamp(2.5rem, 4vw, 3.5rem);
-    line-height: 1;
-    letter-spacing: -0.04em;
+    font-size: 1.5rem;
+    line-height: 1.2;
+    letter-spacing: 0;
 }
 
 .clients-hero__subtitle {
     margin: 12px 0 0;
     color: #23343a;
-    font-size: 1.15rem;
+    font-size: 0.95rem;
 }
 
 .clients-hero__action {
@@ -424,7 +750,7 @@ function formatCompactCurrency(value: number) {
     color: #fff;
     box-shadow: 0 18px 40px rgba(13, 122, 120, 0.22);
     padding: 18px 28px;
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 700;
     cursor: pointer;
 }
@@ -449,7 +775,7 @@ function formatCompactCurrency(value: number) {
 
 .stat-card__label {
     margin: 0 0 18px;
-    font-size: 0.92rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: #24343b;
@@ -467,8 +793,8 @@ function formatCompactCurrency(value: number) {
 }
 
 .stat-card__value {
-    font-size: clamp(2rem, 2.7vw, 2.5rem);
-    letter-spacing: -0.04em;
+    font-size: 1.6rem;
+    letter-spacing: 0;
 }
 
 .stat-card__badge {
@@ -479,12 +805,12 @@ function formatCompactCurrency(value: number) {
     color: #0d6d78;
     border-radius: 999px;
     padding: 8px 12px;
-    font-size: 0.95rem;
+    font-size: 0.875rem;
 }
 
 .stat-card__meta {
     color: #33454d;
-    font-size: 0.92rem;
+    font-size: 0.875rem;
     max-width: 92px;
     line-height: 1.3;
 }
@@ -516,7 +842,7 @@ function formatCompactCurrency(value: number) {
     color: #23343a;
     border-radius: 10px;
     padding: 14px 20px;
-    font-size: 1rem;
+    font-size: 0.875rem;
     cursor: pointer;
 }
 
@@ -566,6 +892,19 @@ function formatCompactCurrency(value: number) {
     cursor: pointer;
 }
 
+.clients-toolbar__button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.clients-filters {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 22px;
+}
+
 .clients-table__head {
     background: #fbfcfd;
     border-top: 1px solid #e3e8ef;
@@ -584,7 +923,7 @@ function formatCompactCurrency(value: number) {
 .clients-table__row--head {
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    font-size: 0.84rem;
+    font-size: 0.75rem;
     color: #22353d;
 }
 
@@ -607,7 +946,7 @@ function formatCompactCurrency(value: number) {
     background: #e9edf2;
     color: #0e6b70;
     font-weight: 700;
-    font-size: 1.1rem;
+    font-size: 1rem;
 }
 
 .clients-table__name,
@@ -617,19 +956,21 @@ function formatCompactCurrency(value: number) {
 }
 
 .clients-table__name {
-    font-size: 1.05rem;
-    font-weight: 700;
+    font-size: 0.95rem;
+    font-weight: 600;
     margin-bottom: 4px;
 }
 
 .clients-table__domain {
     margin: 0;
     color: #56666c;
+    font-size: 0.875rem;
 }
 
 .clients-table__industry {
     color: #22353d;
     line-height: 1.45;
+    font-size: 0.875rem;
 }
 
 .clients-table__status {
@@ -641,6 +982,7 @@ function formatCompactCurrency(value: number) {
     background: #d8f6fb;
     color: #0c6a73;
     font-weight: 500;
+    font-size: 0.8125rem;
 }
 
 .clients-table__status--inactive {
@@ -651,6 +993,39 @@ function formatCompactCurrency(value: number) {
 .clients-table__actions {
     display: flex;
     gap: 8px;
+}
+
+.clients-table__menu {
+    position: relative;
+}
+
+.clients-table__menu-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 140px;
+    border: 1px solid #d7dee6;
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 8px 18px rgba(30, 41, 59, 0.1);
+    padding: 6px;
+    display: grid;
+    gap: 4px;
+    z-index: 5;
+}
+
+.clients-table__menu-panel button {
+    border: 0;
+    background: transparent;
+    text-align: left;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.clients-table__menu-panel button:hover {
+    background: #f5f8fb;
 }
 
 .clients-table__icon-button {
@@ -691,6 +1066,11 @@ function formatCompactCurrency(value: number) {
     cursor: pointer;
 }
 
+.clients-pagination__button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .clients-pagination__button--active {
     background: #0d6f70;
     border-color: #0d6f70;
@@ -712,9 +1092,15 @@ function formatCompactCurrency(value: number) {
 
 .clients-add-form__grid {
     display: grid;
-    grid-template-columns: minmax(220px, 1fr) auto;
+    grid-template-columns: repeat(3, minmax(200px, 1fr));
     gap: 16px;
     align-items: end;
+}
+
+.clients-add-form__actions {
+    margin-top: 16px;
+    display: flex;
+    justify-content: flex-end;
 }
 
 .form-field {
@@ -724,7 +1110,7 @@ function formatCompactCurrency(value: number) {
 }
 
 .form-field__label {
-    font-size: 0.92rem;
+    font-size: 0.875rem;
     color: var(--text-2);
     font-weight: 600;
 }
@@ -772,6 +1158,10 @@ function formatCompactCurrency(value: number) {
     .clients-table__body {
         min-width: 980px;
     }
+
+    .clients-add-form__grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 720px) {
@@ -802,6 +1192,11 @@ function formatCompactCurrency(value: number) {
         display: flex;
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .clients-filters {
+        flex-direction: column;
+        align-items: stretch;
     }
 }
 </style>
