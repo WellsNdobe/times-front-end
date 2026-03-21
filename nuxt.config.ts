@@ -7,8 +7,17 @@ export default defineNuxtConfig({
         { path: '~/app/components', pathPrefix: false },
     ],
     compatibilityDate: '2025-07-15',
-    devtools: { enabled: true },
-    modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints', 'nuxt-icon'],
+    devtools: { enabled: false },
+    modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints', '@nuxt/icon'],
+    icon: {
+        mode: 'svg',
+        provider: 'server',
+        clientBundle: {
+            scan: {
+                globInclude: ['**/*.{vue,js,ts,jsx,tsx,md,mdc,mdx,yml,yaml}'],
+            },
+        },
+    },
     css: [
         '~/assets/styles/tokens.css',
         '~/assets/styles/base.css',
