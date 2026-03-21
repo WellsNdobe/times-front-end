@@ -34,6 +34,8 @@ const now = ref(Date.now())
 let ticker: ReturnType<typeof setInterval> | null = null
 let notesSyncTimer: ReturnType<typeof setTimeout> | null = null
 
+const WEEKLY_GOAL_MINUTES = 40 * 60
+
 const organizationId = computed(() => org.value?.id ?? "")
 const activeProjects = computed(() =>
     projects.value
@@ -47,6 +49,9 @@ const todayEntries = computed(() =>
 )
 const todayTotalMinutes = computed(() =>
     todayEntries.value.reduce((total, entry) => total + (entry.durationMinutes ?? 0), 0)
+)
+const weekTotalMinutes = computed(() =>
+    entries.value.reduce((total, entry) => total + (entry.durationMinutes ?? 0), 0)
 )
 const selectedDateLabel = computed(() => formatDateLong(workDate.value))
 const hasProjects = computed(() => activeProjects.value.length > 0)
@@ -66,6 +71,42 @@ const timesheetStatusLabel = computed(() => {
 const isTimesheetEditable = computed(() => {
     const status = timesheet.value?.status
     return status === undefined || status === 0 || status === 3
+})
+const selectedProject = computed(
+    () => projects.value.find((project) => project.id === selectedProjectId.value) ?? null
+)
+const selectedProjectClient = computed(
+    () => selectedProject.value?.clientName || org.value?.name || "No client assigned"
+)
+const heroStatusLabel = computed(() => (running.value ? "Currently tracking" : "Ready to track"))
+const heroTitle = computed(() => selectedProject.value?.name || "Choose a project to begin")
+const heroSubtitle = computed(() => {
+    if (running.value && notes.value.trim()) return notes.value.trim()
+    if (selectedProject.value && notes.value.trim()) return notes.value.trim()
+    if (running.value) return "Timer is active for your current work session."
+    return "Select a project, set a date, and start capturing time."
+})
+const weeklyGoalProgress = computed(() =>
+    Math.min(100, Math.round((weekTotalMinutes.value / WEEKLY_GOAL_MINUTES) * 100))
+)
+const weeklyGoalLabel = computed(
+    () => `${formatHoursValue(weekTotalMinutes.value)} / 40h`
+)
+const averageEntryLabel = computed(() => {
+    if (!todayEntries.value.length) return "No entries yet"
+    const average = Math.round(todayTotalMinutes.value / todayEntries.value.length)
+    return `${formatMinutes(average)} avg/session`
+})
+const focusScore = computed(() => {
+    const entryBonus = Math.min(todayEntries.value.length * 7, 28)
+    const trackingRatio = Math.min(todayTotalMinutes.value / (8 * 60), 1)
+    return Math.min(99, Math.round(trackingRatio * 72 + entryBonus))
+})
+const focusDeltaLabel = computed(() => {
+    if (focusScore.value >= 85) return "Excellent pace today"
+    if (focusScore.value >= 60) return "Solid rhythm this session"
+    if (focusScore.value > 0) return "Keep building momentum"
+    return "Start tracking to generate a score"
 })
 
 onMounted(() => loadTrackerData())
@@ -306,6 +347,20 @@ function projectNameById(projectId: string) {
     return projects.value.find((project) => project.id === projectId)?.name ?? "Unknown project"
 }
 
+function projectClientById(projectId: string) {
+    return (
+        projects.value.find((project) => project.id === projectId)?.clientName ??
+        org.value?.name ??
+        "Internal"
+    )
+}
+
+function projectAccent(projectId: string) {
+    const palette = ["#3b82f6", "#14b8a6", "#f59e0b", "#8b5cf6", "#ef4444", "#0f766e"]
+    const hash = Array.from(projectId).reduce((total, char) => total + char.charCodeAt(0), 0)
+    return palette[hash % palette.length]
+}
+
 function mergeCreatedEntry(entry: TimesheetEntry) {
     if (timesheet.value?.id !== entry.timesheetId) return
 
@@ -416,6 +471,14 @@ function formatMinutes(total: number) {
     return `${hours}h ${minutes}m`
 }
 
+function formatDurationBadge(totalMinutes: number) {
+    return formatSecondsAsClock(Math.max(0, totalMinutes) * 60)
+}
+
+function formatHoursValue(totalMinutes: number) {
+    return `${Math.round((totalMinutes / 60) * 10) / 10}h`
+}
+
 function formatDateLong(value: string) {
     if (!value) return ""
     const date = new Date(`${value}T00:00:00`)
@@ -435,14 +498,19 @@ function parseUtcDateTime(value: string) {
 </script>
 
 <template>
-    <section class="card track">
-        <header class="track__header">
+    <section class="track-page">
+        <div class="track-page__header">
             <div>
-                <h1 class="track__title">Track time</h1>
-                <p v-if="org" class="track__subtitle">{{ org.name }}</p>
+                <p class="track-page__eyebrow">Track Time</p>
+                <h1 class="track-page__title">Create a clearer view of today’s work.</h1>
+                <p v-if="org" class="track-page__subtitle">{{ org.name }} · {{ selectedDateLabel }}</p>
             </div>
-            <p class="track__date">{{ selectedDateLabel }}</p>
-        </header>
+            <div class="track-page__badges">
+                <span class="track-badge">{{ timesheetStatusLabel }}</span>
+                <span class="track-badge">{{ todayEntries.length }} entries</span>
+                <span class="track-badge track-badge--strong">{{ formatMinutes(todayTotalMinutes) }} today</span>
+            </div>
+        </div>
 
         <div v-if="error" class="alert" role="alert">
             <div class="alert__title">{{ error.title }}</div>
@@ -450,45 +518,103 @@ function parseUtcDateTime(value: string) {
         </div>
 
         <template v-else-if="loading">
-            <p class="muted">Loading tracker...</p>
+            <section class="track-panel track-panel--loading">
+                <p class="muted">Loading tracker...</p>
+            </section>
         </template>
 
         <template v-else>
-            <div class="track__chips">
-                <span class="track-chip">Status: {{ timesheetStatusLabel }}</span>
-                <span class="track-chip">{{ formatMinutes(todayTotalMinutes) }} today</span>
-                <span class="track-chip">{{ todayEntries.length }} entries</span>
+            <div v-if="!isTimesheetEditable" class="track-lock" role="status">
+                <Icon name="mdi:lock-outline" size="18" />
+                <span>Timesheet is {{ timesheetStatusLabel.toLowerCase() }}. Editing is disabled.</span>
             </div>
 
-            <div v-if="!isTimesheetEditable" class="track__notice" role="status">
-                Timesheet is {{ timesheetStatusLabel.toLowerCase() }}. Editing is disabled.
-            </div>
+            <section class="track-hero">
+                <div class="track-hero__content">
+                    <div class="track-hero__status">
+                        <span class="track-hero__dot"></span>
+                        {{ heroStatusLabel }}
+                    </div>
 
-            <section class="track__composer">
-                <p class="track__timer">{{ elapsedDisplay }}</p>
+                    <h2 class="track-hero__title">{{ heroTitle }}</h2>
 
-                <div class="track__grid">
-                    <label class="track__field">
-                        <span>Project</span>
-                        <select v-model="selectedProjectId" :disabled="running || !isTimesheetEditable">
-                            <option value="">Select project</option>
-                            <option
-                                v-for="project in activeProjects"
-                                :key="project.id"
-                                :value="project.id"
+                    <div class="track-hero__meta">
+                        <label class="track-project-pill">
+                            <span class="sr-only">Project</span>
+                            <select
+                                v-model="selectedProjectId"
+                                :disabled="running || !isTimesheetEditable"
+                                class="track-project-pill__select"
                             >
-                                {{ project.name }}
-                            </option>
-                        </select>
-                    </label>
+                                <option value="">Select project</option>
+                                <option v-for="project in activeProjects" :key="project.id" :value="project.id">
+                                    {{ project.name }}
+                                </option>
+                            </select>
+                            <Icon name="mdi:chevron-down" size="18" />
+                        </label>
 
-                    <label class="track__field">
-                        <span>Date</span>
+                        <span class="track-hero__meta-divider">•</span>
+                        <p class="track-hero__meta-text">{{ selectedProjectClient }}</p>
+                    </div>
+
+                    <p class="track-hero__summary">{{ heroSubtitle }}</p>
+                </div>
+
+                <div class="track-hero__timer-panel">
+                    <p class="track-hero__timer">{{ elapsedDisplay }}</p>
+                    <div class="track-hero__actions">
+                        <button
+                            v-if="!running"
+                            type="button"
+                            class="btn track-btn track-btn--primary"
+                            :disabled="saving || !isTimesheetEditable || !selectedProjectId || !hasProjects"
+                            @click="startTimer"
+                        >
+                            <Icon name="mdi:play-circle" size="20" />
+                            <span>{{ saving ? "Starting..." : "Start Timer" }}</span>
+                        </button>
+                        <button
+                            v-else
+                            type="button"
+                            class="btn track-btn track-btn--primary"
+                            :disabled="saving || !isTimesheetEditable"
+                            @click="stopAndSave"
+                        >
+                            <Icon name="mdi:stop-circle-outline" size="20" />
+                            <span>{{ saving ? "Saving..." : "Stop Timer" }}</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            class="btn track-btn track-btn--secondary"
+                            :disabled="
+                                running ||
+                                saving ||
+                                !isTimesheetEditable ||
+                                !hasProjects ||
+                                !selectedProjectId ||
+                                !manualMinutes ||
+                                manualMinutes <= 0
+                            "
+                            @click="addManualEntry"
+                        >
+                            <Icon name="mdi:plus" size="20" />
+                            <span>Add Entry</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="track-panel track-panel--controls">
+                <div class="track-controls">
+                    <label class="track-field">
+                        <span class="track-field__label">Date</span>
                         <input v-model="workDate" type="date" :disabled="running" />
                     </label>
 
-                    <label class="track__field">
-                        <span>Minutes</span>
+                    <label class="track-field">
+                        <span class="track-field__label">Manual minutes</span>
                         <input
                             v-model.number="manualMinutes"
                             type="number"
@@ -499,57 +625,22 @@ function parseUtcDateTime(value: string) {
                         />
                     </label>
 
-                    <label class="track__field track__field--full">
-                        <span>Notes</span>
-                        <input
-                            v-model.trim="notes"
-                            type="text"
-                            placeholder="Optional"
-                            :disabled="!isTimesheetEditable"
-                        />
-                    </label>
+                    <div class="track-field track-field--summary">
+                        <span class="track-field__label">Today</span>
+                        <strong>{{ formatMinutes(todayTotalMinutes) }}</strong>
+                        <small>{{ averageEntryLabel }}</small>
+                    </div>
                 </div>
 
-                <div class="track__actions">
-                    <button
-                        type="button"
-                        class="btn btn-primary"
-                        :disabled="
-                            running ||
-                            saving ||
-                            !isTimesheetEditable ||
-                            !selectedProjectId ||
-                            !hasProjects
-                        "
-                        @click="startTimer"
-                    >
-                        Start timer
-                    </button>
-                    <button
-                        type="button"
-                        class="btn btn-secondary"
-                        :disabled="!running || saving || !isTimesheetEditable"
-                        @click="stopAndSave"
-                    >
-                        {{ saving ? "Saving..." : "Stop and save" }}
-                    </button>
-                    <button
-                        type="button"
-                        class="btn btn-secondary"
-                        :disabled="
-                            running ||
-                            saving ||
-                            !isTimesheetEditable ||
-                            !hasProjects ||
-                            !selectedProjectId ||
-                            !manualMinutes ||
-                            manualMinutes <= 0
-                        "
-                        @click="addManualEntry"
-                    >
-                        Add minutes
-                    </button>
-                </div>
+                <label class="track-field track-field--full">
+                    <span class="track-field__label">Notes</span>
+                    <textarea
+                        v-model.trim="notes"
+                        rows="3"
+                        placeholder="Add task details, outcomes, or context for this entry."
+                        :disabled="!isTimesheetEditable"
+                    />
+                </label>
 
                 <p v-if="!hasProjects" class="muted">No active projects available.</p>
             </section>
@@ -559,217 +650,556 @@ function parseUtcDateTime(value: string) {
                 <div class="alert__msg">{{ localError.message }}</div>
             </div>
 
-            <section class="track__entries">
-                <div class="track__entries-head">
-                    <h2 class="track__entries-title">Log</h2>
-                    <p class="track__entries-total">{{ formatMinutes(todayTotalMinutes) }} today</p>
+            <section class="track-panel track-log">
+                <div class="track-log__header">
+                    <div>
+                        <h2 class="track-log__title">Today’s Log</h2>
+                        <p class="track-log__subtitle">{{ selectedDateLabel }}</p>
+                    </div>
+                    <div class="track-log__summary">
+                        <span>Total for today</span>
+                        <strong>{{ formatDurationBadge(todayTotalMinutes) }}</strong>
+                    </div>
                 </div>
 
-                <table v-if="todayEntries.length" class="track-table">
-                    <thead>
-                        <tr>
-                            <th>Project</th>
-                            <th>Time</th>
-                            <th>Duration</th>
-                            <th>Notes</th>
-                            <th class="track-table__actions">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr v-for="entry in todayEntries" :key="entry.id">
-                            <td data-label="Project">{{ projectNameById(entry.projectId) }}</td>
-                            <td data-label="Time">
+                <div v-if="todayEntries.length" class="track-log__table">
+                    <div class="track-log__head track-log__row">
+                        <span>Project</span>
+                        <span>Task</span>
+                        <span>Duration</span>
+                        <span>Actions</span>
+                    </div>
+
+                    <article v-for="entry in todayEntries" :key="entry.id" class="track-log__row track-entry">
+                        <div class="track-entry__project" data-label="Project">
+                            <span class="track-entry__dot" :style="{ backgroundColor: projectAccent(entry.projectId) }"></span>
+                            <div>
+                                <strong>{{ projectNameById(entry.projectId) }}</strong>
+                                <p>{{ projectClientById(entry.projectId) }}</p>
+                            </div>
+                        </div>
+
+                        <div class="track-entry__task" data-label="Task">
+                            <strong>{{ entry.notes || "Focused work session" }}</strong>
+                            <p>
                                 {{
                                     entry.startTime && entry.endTime
                                         ? `${entry.startTime} - ${entry.endTime}`
-                                        : "Manual"
+                                        : "Manual time entry"
                                 }}
-                            </td>
-                            <td data-label="Duration">{{ formatMinutes(entry.durationMinutes ?? 0) }}</td>
-                            <td data-label="Notes">{{ entry.notes || "N/A" }}</td>
-                            <td class="track-table__actions" data-label="Actions">
-                                <button
-                                    type="button"
-                                    class="btn btn-secondary btn-sm"
-                                    :disabled="deletingId === entry.id || !isTimesheetEditable"
-                                    @click="deleteEntry(entry)"
-                                >
-                                    {{ deletingId === entry.id ? "Removing..." : "Delete" }}
-                                </button>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
+                            </p>
+                        </div>
+
+                        <div class="track-entry__duration" data-label="Duration">
+                            {{ formatDurationBadge(entry.durationMinutes ?? 0) }}
+                        </div>
+
+                        <div class="track-entry__actions" data-label="Actions">
+                            <button
+                                type="button"
+                                class="btn btn-secondary btn-sm"
+                                :disabled="deletingId === entry.id || !isTimesheetEditable"
+                                @click="deleteEntry(entry)"
+                            >
+                                {{ deletingId === entry.id ? "Removing..." : "Delete" }}
+                            </button>
+                        </div>
+                    </article>
+                </div>
+
                 <p v-else class="muted">No entries for this day yet.</p>
+            </section>
+
+            <section class="track-stats">
+                <article class="track-stat-card">
+                    <div class="track-stat-card__header">
+                        <span>Weekly Goal</span>
+                        <Icon name="mdi:flag-variant-outline" size="22" />
+                    </div>
+                    <strong class="track-stat-card__value">{{ weeklyGoalLabel }}</strong>
+                    <div class="track-progress">
+                        <span class="track-progress__bar" :style="{ width: `${weeklyGoalProgress}%` }"></span>
+                    </div>
+                    <p>{{ weeklyGoalProgress }}% of 40h target</p>
+                </article>
+
+                <article class="track-stat-card">
+                    <div class="track-stat-card__header">
+                        <span>Tracked This Week</span>
+                        <Icon name="mdi:cash-multiple" size="22" />
+                    </div>
+                    <strong class="track-stat-card__value">{{ formatDurationBadge(weekTotalMinutes) }}</strong>
+                    <p>{{ activeProjects.length }} active projects available to log against.</p>
+                </article>
+
+                <article class="track-stat-card track-stat-card--accent">
+                    <div class="track-stat-card__header">
+                        <span>Focus Score</span>
+                        <Icon name="mdi:lightning-bolt" size="22" />
+                    </div>
+                    <strong class="track-stat-card__value">{{ focusScore }}%</strong>
+                    <p>{{ focusDeltaLabel }}</p>
+                </article>
             </section>
         </template>
     </section>
 </template>
 
 <style scoped>
-.track {
-    padding: var(--s-5);
-}
-
-.track__header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: var(--s-4);
-    margin-bottom: var(--s-3);
-}
-
-.track__title {
-    margin: 0 0 var(--s-1) 0;
-    font-size: 1.5rem;
-}
-
-.track__subtitle {
-    margin: 0;
-    color: var(--text-2);
-}
-
-.track__date {
-    margin: 0;
-    color: var(--text-2);
-    font-size: 0.875rem;
-    font-weight: 600;
-}
-
-.track__chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    margin-bottom: var(--s-3);
-}
-
-.track-chip {
-    display: inline-flex;
-    align-items: center;
-    min-height: 30px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0 var(--s-2);
-    background: var(--surface-2);
-    font-size: 0.875rem;
-}
-
-.track__timer {
-    margin: 0 0 var(--s-3) 0;
-    font-size: 2.25rem;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
-}
-
-.track__notice {
-    margin-bottom: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: var(--surface-2);
-    padding: var(--s-2) var(--s-3);
-    color: var(--text-2);
-    font-size: 0.875rem;
-}
-
-.track__composer {
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: linear-gradient(165deg, var(--surface-2) 0%, var(--surface) 100%);
-    padding: var(--s-3);
-    margin-bottom: var(--s-3);
-}
-
-.track__grid {
+.track-page {
     display: grid;
-    grid-template-columns: repeat(3, minmax(160px, 1fr));
-    gap: var(--s-3);
-    margin-bottom: var(--s-3);
+    gap: 24px;
 }
 
-.track__field {
+.track-page__header {
     display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-}
-
-.track__field span {
-    font-size: 0.8125rem;
-    color: var(--text-2);
-    font-weight: 600;
-}
-
-.track__field--full {
-    grid-column: 1 / -1;
-}
-
-.track__actions {
-    display: flex;
-    gap: var(--s-2);
-    flex-wrap: wrap;
-    margin-bottom: var(--s-2);
-}
-
-.track__entries {
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    padding: var(--s-3);
-}
-
-.track__entries-head {
-    display: flex;
+    align-items: flex-start;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: var(--s-2);
+    gap: 16px;
 }
 
-.track__entries-title {
+.track-page__eyebrow {
+    margin: 0 0 8px;
+    color: var(--primary);
+    font-size: 0.95rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.track-page__title {
     margin: 0;
+    font-size: clamp(1.9rem, 3vw, 2.6rem);
+    line-height: 1.05;
+}
+
+.track-page__subtitle {
+    margin: 10px 0 0;
+    color: var(--text-2);
     font-size: 1rem;
 }
 
-.track__entries-total {
+.track-page__badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.track-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 0 16px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid rgba(15, 118, 110, 0.12);
+    color: var(--text-2);
+    font-size: 0.95rem;
+    font-weight: 700;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+}
+
+.track-badge--strong {
+    color: var(--primary);
+}
+
+.track-panel,
+.track-hero,
+.track-stat-card {
+    border-radius: 24px;
+    border: 1px solid rgba(15, 118, 110, 0.12);
+    background: rgba(255, 255, 255, 0.88);
+    box-shadow: 0 18px 40px rgba(148, 163, 184, 0.14);
+}
+
+.track-panel {
+    padding: 24px;
+}
+
+.track-panel--loading {
+    display: grid;
+    place-items: center;
+    min-height: 220px;
+}
+
+.track-lock {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-radius: 16px;
+    background: #fff7ed;
+    border: 1px solid rgba(217, 119, 6, 0.18);
+    color: #9a3412;
+    font-weight: 600;
+}
+
+.track-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.9fr);
+    gap: 24px;
+    padding: 32px 40px;
+    background:
+        radial-gradient(circle at top right, rgba(45, 212, 191, 0.16), transparent 34%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(242, 251, 250, 0.96) 100%);
+}
+
+.track-hero__content {
+    display: grid;
+    align-content: start;
+    gap: 16px;
+}
+
+.track-hero__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: #0891b2;
+    font-size: 0.95rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.track-hero__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #7dd3fc 0%, #5eead4 100%);
+}
+
+.track-hero__title {
     margin: 0;
+    font-size: clamp(2rem, 4vw, 3rem);
+    line-height: 1.02;
+    letter-spacing: -0.03em;
+}
+
+.track-hero__meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    color: var(--text-2);
+}
+
+.track-project-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 0 14px;
+    border-radius: 14px;
+    background: #eef3fb;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.track-project-pill__select {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-1);
+    font-weight: 700;
+    min-width: 160px;
+}
+
+.track-project-pill__select:focus {
+    box-shadow: none;
+}
+
+.track-hero__meta-divider {
+    font-size: 1.4rem;
+    line-height: 1;
+    color: #94a3b8;
+}
+
+.track-hero__meta-text,
+.track-hero__summary {
+    margin: 0;
+    color: #64748b;
+    font-size: 1.05rem;
+}
+
+.track-hero__timer-panel {
+    display: grid;
+    align-content: center;
+    justify-items: end;
+    gap: 24px;
+}
+
+.track-hero__timer {
+    margin: 0;
+    font-size: clamp(3rem, 6vw, 5.5rem);
+    line-height: 0.9;
+    font-weight: 900;
+    letter-spacing: -0.06em;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+}
+
+.track-hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 14px;
+}
+
+.track-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 62px;
+    padding: 0 28px;
+    border-radius: 16px;
+    font-size: 1.05rem;
+    font-weight: 800;
+    box-shadow: 0 14px 24px rgba(15, 118, 110, 0.16);
+}
+
+.track-btn--primary {
+    background: linear-gradient(135deg, #14b8a6 0%, var(--primary) 100%);
+}
+
+.track-btn--primary:hover {
+    background: linear-gradient(135deg, #0f9f90 0%, #0b5f59 100%);
+}
+
+.track-btn--secondary {
+    background: #eff4fb;
+    border-color: #e2e8f0;
+    color: #1e3a5f;
+    box-shadow: none;
+}
+
+.track-btn--secondary:hover {
+    background: #e6edf8;
+}
+
+.track-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.track-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.track-field__label {
+    color: var(--text-2);
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.track-field--summary {
+    justify-content: center;
+    padding: 14px 18px;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.track-field--summary strong {
+    font-size: 1.6rem;
+    line-height: 1;
+}
+
+.track-field--summary small {
+    color: var(--text-2);
+    font-size: 0.92rem;
+}
+
+.track-field--full textarea {
+    resize: vertical;
+    min-height: 104px;
+}
+
+.track-log {
+    display: grid;
+    gap: 18px;
+}
+
+.track-log__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.track-log__title {
+    margin: 0;
+    font-size: 2rem;
+    letter-spacing: -0.04em;
+}
+
+.track-log__subtitle {
+    margin: 8px 0 0;
+    color: var(--text-2);
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.track-log__summary {
+    display: grid;
+    gap: 6px;
+    justify-items: end;
     color: var(--text-2);
     font-weight: 600;
 }
 
-.track-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
+.track-log__summary strong {
+    color: var(--primary);
+    font-size: 1.7rem;
+    letter-spacing: 0.08em;
+    font-variant-numeric: tabular-nums;
 }
 
-.track-table th,
-.track-table td {
-    padding: var(--s-3);
-    border-bottom: 1px solid var(--border);
-    text-align: left;
-    vertical-align: top;
+.track-log__table {
+    border-radius: 20px;
+    overflow: hidden;
+    border: 1px solid rgba(226, 232, 240, 0.9);
 }
 
-.track-table th {
-    font-size: 0.75rem;
-    color: var(--text-3);
+.track-log__row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.1fr) minmax(220px, 1.8fr) 160px 120px;
+    gap: 18px;
+    align-items: center;
+    padding: 18px 28px;
+    background: rgba(255, 255, 255, 0.92);
+}
+
+.track-log__head {
+    background: linear-gradient(180deg, #fbfdff 0%, #f7faff 100%);
+    color: #64748b;
+    font-size: 0.8rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
+}
+
+.track-entry + .track-entry {
+    border-top: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.track-entry__project,
+.track-entry__task,
+.track-entry__actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.track-entry__project strong,
+.track-entry__task strong {
+    display: block;
+    font-size: 1.08rem;
+}
+
+.track-entry__project p,
+.track-entry__task p {
+    margin: 6px 0 0;
+    color: var(--text-2);
+}
+
+.track-entry__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    flex-shrink: 0;
+}
+
+.track-entry__duration {
+    justify-self: start;
+    padding: 8px 14px;
+    border-radius: 12px;
+    background: #eef3fb;
+    color: #1e3a5f;
+    font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 1.05rem;
+    font-weight: 700;
     letter-spacing: 0.05em;
 }
 
-.track-table td {
-    word-break: break-word;
+.track-entry__actions {
+    justify-content: flex-end;
 }
 
-.track-table__actions {
-    width: 110px;
+.track-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.track-stat-card {
+    padding: 28px;
+    display: grid;
+    gap: 14px;
+}
+
+.track-stat-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #64748b;
+    font-size: 0.88rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.track-stat-card__value {
+    font-size: clamp(2rem, 4vw, 3rem);
+    line-height: 1;
+    letter-spacing: -0.05em;
+}
+
+.track-stat-card p {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 1rem;
+}
+
+.track-progress {
+    position: relative;
+    overflow: hidden;
+    height: 10px;
+    border-radius: 999px;
+    background: #e8edf5;
+}
+
+.track-progress__bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #22c1b4 0%, var(--primary) 100%);
+}
+
+.track-stat-card--accent {
+    background: linear-gradient(135deg, #11998e 0%, var(--primary) 100%);
+    color: white;
+}
+
+.track-stat-card--accent .track-stat-card__header,
+.track-stat-card--accent p {
+    color: rgba(255, 255, 255, 0.84);
 }
 
 .btn-sm {
-    padding: 6px 10px;
-    font-size: 0.875rem;
+    padding: 8px 12px;
+    font-size: 0.9rem;
 }
 
 .alert--inline {
-    margin-bottom: var(--s-4);
+    margin-top: -6px;
 }
 
 .muted {
@@ -777,68 +1207,122 @@ function parseUtcDateTime(value: string) {
     color: var(--text-2);
 }
 
-@media (max-width: 980px) {
-    .track__grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
-@media (max-width: 760px) {
-    .track {
-        padding: var(--s-4);
-    }
-    .track__header {
-        align-items: flex-start;
-        gap: var(--s-2);
-        flex-direction: column;
-    }
-    .track__grid {
+@media (max-width: 1180px) {
+    .track-hero {
         grid-template-columns: 1fr;
     }
 
-    .track-table,
-    .track-table thead,
-    .track-table tbody,
-    .track-table tr,
-    .track-table th,
-    .track-table td {
-        display: block;
+    .track-hero__timer-panel,
+    .track-hero__actions {
+        justify-items: start;
+        justify-content: flex-start;
     }
 
-    .track-table thead {
+    .track-stats {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 860px) {
+    .track-page__header,
+    .track-log__header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .track-page__badges,
+    .track-log__summary {
+        justify-content: flex-start;
+        justify-items: start;
+    }
+
+    .track-controls {
+        grid-template-columns: 1fr;
+    }
+
+    .track-log__table {
+        border: 0;
+        overflow: visible;
+    }
+
+    .track-log__head {
         display: none;
     }
 
-    .track-table tbody {
-        display: grid;
-        gap: var(--s-2);
+    .track-entry {
+        grid-template-columns: 1fr;
+        gap: 12px;
+        margin-bottom: 14px;
+        border: 1px solid rgba(226, 232, 240, 0.9);
+        border-radius: 18px;
+        box-shadow: 0 14px 24px rgba(148, 163, 184, 0.08);
     }
 
-    .track-table tr {
-        border: 1px solid var(--border);
-        border-radius: var(--r-sm);
-        padding: var(--s-2);
-        background: var(--surface);
+    .track-entry + .track-entry {
+        border-top: 1px solid rgba(226, 232, 240, 0.9);
     }
 
-    .track-table td {
-        border: 0;
-        padding: var(--s-1) 0;
+    .track-entry__project,
+    .track-entry__task,
+    .track-entry__actions {
+        align-items: flex-start;
     }
 
-    .track-table td::before {
-        content: attr(data-label);
-        display: block;
-        font-size: 0.75rem;
-        color: var(--text-3);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-weight: 700;
-        margin-bottom: 2px;
+    .track-entry__duration,
+    .track-entry__actions {
+        justify-self: start;
+    }
+}
+
+@media (max-width: 640px) {
+    .track-page {
+        gap: 18px;
     }
 
-    .track-table__actions {
-        width: auto;
+    .track-panel,
+    .track-stat-card,
+    .track-hero {
+        padding: 20px;
+        border-radius: 20px;
+    }
+
+    .track-hero__meta {
+        gap: 10px;
+    }
+
+    .track-project-pill {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .track-project-pill__select {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .track-btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .track-hero__actions {
+        width: 100%;
+    }
+
+    .track-log__row {
+        padding: 16px 18px;
     }
 }
 </style>
