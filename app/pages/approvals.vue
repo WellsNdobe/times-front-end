@@ -146,10 +146,24 @@ function projectName(projectId?: string) {
     return projectById.value.get(projectId)?.name ?? "Unknown project"
 }
 
+function parseDateForDisplay(value?: string) {
+    if (!value) return null
+    const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+    if (dateOnlyMatch) {
+        const year = Number(dateOnlyMatch[1])
+        const month = Number(dateOnlyMatch[2])
+        const day = Number(dateOnlyMatch[3])
+        return new Date(year, month - 1, day)
+    }
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return null
+    return parsed
+}
+
 function longDate(date?: string) {
     if (!date) return "—"
-    const parsed = new Date(date)
-    if (Number.isNaN(parsed.getTime())) return date
+    const parsed = parseDateForDisplay(date)
+    if (!parsed) return date
     return parsed.toLocaleDateString("en-US", {
         month: "short",
         day: "2-digit",
@@ -159,8 +173,8 @@ function longDate(date?: string) {
 
 function dayDate(date?: string) {
     if (!date) return "—"
-    const parsed = new Date(date)
-    if (Number.isNaN(parsed.getTime())) return date
+    const parsed = parseDateForDisplay(date)
+    if (!parsed) return date
     return parsed.toLocaleDateString("en-US", {
         weekday: "short",
         month: "short",
@@ -172,9 +186,9 @@ function formatPeriodLabel(start?: string, end?: string) {
     if (!start && !end) return "—"
     if (!start) return longDate(end)
     if (!end) return longDate(start)
-    const startDate = new Date(start)
-    const endDate = new Date(end)
-    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return `${start} - ${end}`
+    const startDate = parseDateForDisplay(start)
+    const endDate = parseDateForDisplay(end)
+    if (!startDate || !endDate) return `${start} - ${end}`
     const sameYear = startDate.getFullYear() === endDate.getFullYear()
     const startLabel = startDate.toLocaleDateString("en-US", {
         month: "short",
@@ -256,25 +270,37 @@ async function loadApprovals() {
         const firstOrg = orgs[0]
         if (!firstOrg) return
         org.value = firstOrg
-        const [membersResult, projectsResult, approvalsResult] = await Promise.all([
+        const [membersResult, projectsResult] = await Promise.all([
             organizationsApi.getMembers(firstOrg.id),
             projectsApi.list(firstOrg.id),
-            timesheetsApi.listPendingApproval(firstOrg.id),
         ])
+        let approvalsResult: Timesheet[] = []
+        try {
+            approvalsResult = await timesheetsApi.listOrg(firstOrg.id)
+        } catch (cause) {
+            console.warn("Falling back to pending-approval list for approvals page:", cause)
+            approvalsResult = await timesheetsApi.listPendingApproval(firstOrg.id)
+        }
         members.value = membersResult
         projects.value = projectsResult
-        approvals.value = approvalsResult.map((timesheet) => ({
-            ...timesheet,
-            status: timesheet.status ?? 1,
-            rejectReason: "",
-            isExpanded: false,
-            isRejectPanelOpen: false,
-            entries: undefined,
-            entriesLoading: false,
-            entriesError: null,
-            error: null,
-            activityNote: "",
-        }))
+        approvals.value = approvalsResult
+            .filter((timesheet) => {
+                const status = timesheet.status
+                return status === 1 || status === 2 || status === 3
+            })
+            .map((timesheet) => ({
+                ...timesheet,
+                status: timesheet.status ?? 1,
+                rejectReason: "",
+                isExpanded: false,
+                isRejectPanelOpen: false,
+                entries: undefined,
+                entriesLoading: false,
+                entriesError: null,
+                error: null,
+                activityNote: "",
+            }))
+        selectedIds.value = []
     } catch (cause) {
         console.error("Load approvals error:", cause)
         error.value = toUiError(cause)
