@@ -12,12 +12,14 @@ import { useAuth } from "~/composables/useAuth"
 type ApprovalRow = Timesheet & {
     isApproving?: boolean
     isRejecting?: boolean
-    rejectReason?: string
     isExpanded?: boolean
+    isRejectPanelOpen?: boolean
+    rejectReason?: string
     entries?: TimesheetEntry[]
     entriesLoading?: boolean
     entriesError?: UiError | null
     error?: UiError | null
+    activityNote?: string
 }
 
 const org = ref<Organization | null>(null)
@@ -26,13 +28,16 @@ const members = ref<OrganizationMember[]>([])
 const projects = ref<Project[]>([])
 const loading = ref(true)
 const error = ref<UiError | null>(null)
-const mySubmissions = ref<Timesheet[]>([])
+const selectedIds = ref<string[]>([])
+const employeeFilter = ref("all")
+const periodFilter = ref("all")
+const statusFilter = ref("all")
 
 const { user } = useAuth()
 
 const memberMap = computed(() => {
     const map = new Map<string, OrganizationMember>()
-    for (const m of members.value) map.set(m.userId, m)
+    for (const member of members.value) map.set(member.userId, member)
     return map
 })
 
@@ -44,7 +49,7 @@ const projectById = computed(() => {
 
 const myMember = computed(() => {
     if (!user.value?.userId) return null
-    return members.value.find((m) => m.userId === user.value?.userId) ?? null
+    return members.value.find((member) => member.userId === user.value?.userId) ?? null
 })
 
 const isProjectApprover = computed(() => {
@@ -53,7 +58,69 @@ const isProjectApprover = computed(() => {
     return projects.value.some((project) => (project.approverUserIds as string[] | undefined)?.includes(userId))
 })
 
-const canReviewApprovals = computed(() => isProjectApprover.value || approvals.value.length > 0)
+const canReviewApprovals = computed(() => {
+    const role = myMember.value?.role
+    return role === 0 || role === 1 || isProjectApprover.value || approvals.value.length > 0
+})
+
+const employeeOptions = computed(() => {
+    const seen = new Set<string>()
+    return approvals.value
+        .map((row) => ({ id: row.userId as string, name: displayName(row.userId as string) }))
+        .filter((option) => {
+            if (!option.id || seen.has(option.id)) return false
+            seen.add(option.id)
+            return true
+        })
+        .sort((a, b) => a.name.localeCompare(b.name))
+})
+
+const periodOptions = computed(() => {
+    const seen = new Set<string>()
+    return approvals.value
+        .map((row) => {
+            const key = `${row.weekStartDate ?? ""}_${row.weekEndDate ?? ""}`
+            return {
+                key,
+                label: formatPeriodLabel(row.weekStartDate, row.weekEndDate),
+            }
+        })
+        .filter((option) => {
+            if (seen.has(option.key)) return false
+            seen.add(option.key)
+            return true
+        })
+        .sort((a, b) => a.label.localeCompare(b.label))
+})
+
+const filteredApprovals = computed(() =>
+    approvals.value.filter((row) => {
+        const employeeMatch = employeeFilter.value === "all" || row.userId === employeeFilter.value
+        const periodKey = `${row.weekStartDate ?? ""}_${row.weekEndDate ?? ""}`
+        const periodMatch = periodFilter.value === "all" || periodKey === periodFilter.value
+        const rowStatus = statusKey(row.status)
+        const statusMatch = statusFilter.value === "all" || rowStatus === statusFilter.value
+        return employeeMatch && periodMatch && statusMatch
+    })
+)
+
+const pendingRows = computed(() => filteredApprovals.value.filter((row) => row.status === 1))
+const selectedPendingRows = computed(() => pendingRows.value.filter((row) => selectedIds.value.includes(row.id)))
+const allFilteredPendingSelected = computed(
+    () => pendingRows.value.length > 0 && pendingRows.value.every((row) => selectedIds.value.includes(row.id))
+)
+const totalPendingHours = computed(() =>
+    approvals.value
+        .filter((row) => row.status === 1)
+        .reduce((sum, row) => sum + minutesForRow(row), 0)
+)
+const filteredPendingCount = computed(() => pendingRows.value.length)
+
+function minutesForRow(row: Timesheet) {
+    if (typeof row.totalMinutes === "number") return row.totalMinutes
+    if (typeof row.totalHours === "number") return Math.round(row.totalHours * 60)
+    return 0
+}
 
 function displayName(userId?: string) {
     if (!userId) return "Unknown member"
@@ -63,18 +130,15 @@ function displayName(userId?: string) {
     return name || "Unknown member"
 }
 
-function formatDate(date?: string) {
-    if (!date) return "—"
-    const [y, m, d] = date.split("-")
-    if (!y || !m || !d) return date
-    return `${y}-${m}-${d}`
-}
-
-function formatMinutes(total?: number) {
-    if (!total && total !== 0) return "—"
-    const hours = Math.floor(total / 60)
-    const minutes = total % 60
-    return `${hours}h ${minutes}m`
+function initialsFor(userId?: string) {
+    const name = displayName(userId)
+    const initials = name
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0]?.toUpperCase() ?? "")
+        .join("")
+    return initials || "?"
 }
 
 function projectName(projectId?: string) {
@@ -82,19 +146,102 @@ function projectName(projectId?: string) {
     return projectById.value.get(projectId)?.name ?? "Unknown project"
 }
 
-function formatDateDisplay(date?: string) {
-    if (!date) return "â€”"
-    const clean = date.includes("T") ? date.split("T")[0] ?? date : date
-    const [y, m, d] = clean.split("-")
-    if (!y || !m || !d) return date
-    return `${d}/${m}/${y}`
+function longDate(date?: string) {
+    if (!date) return "—"
+    const parsed = new Date(date)
+    if (Number.isNaN(parsed.getTime())) return date
+    return parsed.toLocaleDateString("en-US", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+    })
+}
+
+function dayDate(date?: string) {
+    if (!date) return "—"
+    const parsed = new Date(date)
+    if (Number.isNaN(parsed.getTime())) return date
+    return parsed.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "2-digit",
+    })
+}
+
+function formatPeriodLabel(start?: string, end?: string) {
+    if (!start && !end) return "—"
+    if (!start) return longDate(end)
+    if (!end) return longDate(start)
+    const startDate = new Date(start)
+    const endDate = new Date(end)
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return `${start} - ${end}`
+    const sameYear = startDate.getFullYear() === endDate.getFullYear()
+    const startLabel = startDate.toLocaleDateString("en-US", {
+        month: "short",
+        day: "2-digit",
+        ...(sameYear ? {} : { year: "numeric" }),
+    })
+    const endLabel = endDate.toLocaleDateString("en-US", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+    })
+    return `${startLabel} - ${endLabel}`
+}
+
+function formatHours(totalMinutes?: number, totalHours?: number) {
+    if (typeof totalMinutes === "number") return `${(totalMinutes / 60).toFixed(1)} hrs`
+    if (typeof totalHours === "number") return `${totalHours.toFixed(1)} hrs`
+    return "0.0 hrs"
+}
+
+function statusKey(status?: number) {
+    if (status === 2) return "approved"
+    if (status === 3) return "rejected"
+    if (status === 1) return "pending"
+    return "draft"
 }
 
 function statusLabel(status?: number) {
-    if (status === 1) return "Submitted"
     if (status === 2) return "Approved"
     if (status === 3) return "Rejected"
+    if (status === 1) return "Pending"
     return "Draft"
+}
+
+function statusClass(status?: number) {
+    if (status === 2) return "approval-badge--approved"
+    if (status === 3) return "approval-badge--rejected"
+    if (status === 1) return "approval-badge--pending"
+    return "approval-badge--draft"
+}
+
+function rowStateClass(status?: number) {
+    if (status === 2) return "approval-row--approved"
+    if (status === 3) return "approval-row--rejected"
+    return ""
+}
+
+function isSelected(id: string) {
+    return selectedIds.value.includes(id)
+}
+
+function toggleSelectAll() {
+    if (allFilteredPendingSelected.value) {
+        const pendingIds = new Set(pendingRows.value.map((row) => row.id))
+        selectedIds.value = selectedIds.value.filter((id) => !pendingIds.has(id))
+        return
+    }
+    const merged = new Set([...selectedIds.value, ...pendingRows.value.map((row) => row.id)])
+    selectedIds.value = [...merged]
+}
+
+function toggleSelectRow(id: string) {
+    if (isSelected(id)) {
+        selectedIds.value = selectedIds.value.filter((value) => value !== id)
+        return
+    }
+    selectedIds.value = [...selectedIds.value, id]
 }
 
 async function loadApprovals() {
@@ -109,65 +256,83 @@ async function loadApprovals() {
         const firstOrg = orgs[0]
         if (!firstOrg) return
         org.value = firstOrg
-        if (!org.value?.id) return
-        const [membersResult, projectsResult, approvalsResult, mineResult] = await Promise.all([
-            organizationsApi.getMembers(org.value.id),
-            projectsApi.list(org.value.id),
-            timesheetsApi.listPendingApproval(org.value.id),
-            timesheetsApi.listMine(org.value.id),
+        const [membersResult, projectsResult, approvalsResult] = await Promise.all([
+            organizationsApi.getMembers(firstOrg.id),
+            projectsApi.list(firstOrg.id),
+            timesheetsApi.listPendingApproval(firstOrg.id),
         ])
         members.value = membersResult
         projects.value = projectsResult
-        approvals.value = approvalsResult.map((t) => ({
-            ...t,
+        approvals.value = approvalsResult.map((timesheet) => ({
+            ...timesheet,
+            status: timesheet.status ?? 1,
             rejectReason: "",
             isExpanded: false,
+            isRejectPanelOpen: false,
             entries: undefined,
             entriesLoading: false,
             entriesError: null,
             error: null,
+            activityNote: "",
         }))
-        mySubmissions.value = mineResult.filter((t) => t.status !== undefined && t.status !== 0)
-    } catch (e) {
-        console.error("Load approvals error:", e)
-        error.value = toUiError(e)
+    } catch (cause) {
+        console.error("Load approvals error:", cause)
+        error.value = toUiError(cause)
     } finally {
         loading.value = false
     }
 }
 
 async function approveTimesheet(row: ApprovalRow) {
-    if (!org.value?.id) return
+    if (!org.value?.id || row.isApproving || row.status !== 1) return
     row.error = null
     row.isApproving = true
     try {
         await timesheetsApi.approve(org.value.id, row.id)
-        approvals.value = approvals.value.filter((t) => t.id !== row.id)
-    } catch (e) {
-        console.error("Approve timesheet error:", e)
-        row.error = toUiError(e)
+        row.status = 2
+        row.activityNote = "Approved just now"
+        row.isRejectPanelOpen = false
+        selectedIds.value = selectedIds.value.filter((id) => id !== row.id)
+    } catch (cause) {
+        console.error("Approve timesheet error:", cause)
+        row.error = toUiError(cause)
     } finally {
         row.isApproving = false
     }
 }
 
+async function approveAllPending() {
+    const rows = selectedPendingRows.value.length ? selectedPendingRows.value : pendingRows.value
+    if (!rows.length) return
+    await Promise.all(rows.map((row) => approveTimesheet(row)))
+}
+
+function openRejectPanel(row: ApprovalRow) {
+    row.error = null
+    row.isRejectPanelOpen = !row.isRejectPanelOpen
+}
+
 async function rejectTimesheet(row: ApprovalRow) {
-    if (!org.value?.id) return
+    if (!org.value?.id || row.isRejecting || row.status !== 1) return
     row.error = null
     if (!row.rejectReason?.trim()) {
         row.error = {
             title: "Reason required",
-            message: "Please provide a reason to reject this timesheet.",
+            message: "Please enter a rejection reason before sending this back.",
         }
+        row.isRejectPanelOpen = true
         return
     }
     row.isRejecting = true
     try {
         await timesheetsApi.reject(org.value.id, row.id, { reason: row.rejectReason.trim() })
-        approvals.value = approvals.value.filter((t) => t.id !== row.id)
-    } catch (e) {
-        console.error("Reject timesheet error:", e)
-        row.error = toUiError(e)
+        row.status = 3
+        row.activityNote = "Rejected just now"
+        row.isRejectPanelOpen = false
+        selectedIds.value = selectedIds.value.filter((id) => id !== row.id)
+    } catch (cause) {
+        console.error("Reject timesheet error:", cause)
+        row.error = toUiError(cause)
     } finally {
         row.isRejecting = false
     }
@@ -176,17 +341,15 @@ async function rejectTimesheet(row: ApprovalRow) {
 async function toggleDetails(row: ApprovalRow) {
     if (!org.value?.id) return
     row.isExpanded = !row.isExpanded
-    if (!row.isExpanded) return
-    if (row.entriesLoading) return
-    if (row.entries) return
+    if (!row.isExpanded || row.entriesLoading || row.entries) return
 
     row.entriesLoading = true
     row.entriesError = null
     try {
         row.entries = await timesheetEntriesApi.list(org.value.id, row.id)
-    } catch (e) {
-        console.error("Load timesheet entries error:", e)
-        row.entriesError = toUiError(e)
+    } catch (cause) {
+        console.error("Load timesheet entries error:", cause)
+        row.entriesError = toUiError(cause)
     } finally {
         row.entriesLoading = false
     }
@@ -196,376 +359,679 @@ onMounted(loadApprovals)
 </script>
 
 <template>
-    <section class="card approvals">
-        <header class="approvals__header">
-            <div>
-                <h1 class="approvals__title">Approvals</h1>
-                <p v-if="org" class="approvals__subtitle">{{ org.name }}</p>
-            </div>
-            <div class="approvals__meta">
-                <span class="approvals__meta-label">
-                    {{ canReviewApprovals ? "Pending" : "My submissions" }}
-                </span>
-                <span class="approvals__meta-value">
-                    {{ canReviewApprovals ? approvals.length : mySubmissions.length }}
-                </span>
-            </div>
-        </header>
-
-        <div v-if="error" class="alert" role="alert">
+    <section class="approvals-page">
+        <div v-if="error" class="card approvals-page__alert alert" role="alert">
             <div class="alert__title">{{ error.title }}</div>
             <div class="alert__msg">{{ error.message }}</div>
         </div>
 
         <template v-else-if="loading">
-            <p class="muted">Loading approvals…</p>
+            <section class="card approvals-shell approvals-shell--loading">
+                <p class="muted">Loading approvals…</p>
+            </section>
         </template>
 
         <template v-else>
-            <div class="approvals__table-wrap">
-                <table class="approvals-table" v-if="canReviewApprovals && approvals.length">
-                    <thead>
-                        <tr>
-                            <th>Employee</th>
-                            <th>Week</th>
-                            <th>Total</th>
-                            <th>Submitted</th>
-                            <th class="approvals-table__actions">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <template v-for="row in approvals" :key="row.id">
-                        <tr>
-                            <td>
-                                <div class="approvals__employee">
-                                    <span class="approvals__employee-name">
-                                        {{ displayName(row.userId as string) }}
-                                    </span>
+            <section class="card approvals-shell">
+                <header class="approvals-shell__header">
+                    <div>
+                        <p class="approvals-shell__breadcrumb">Approvals <span>/</span> Pending Queue</p>
+                        <h1 class="approvals-shell__title">Pending Queue</h1>
+                        <p class="approvals-shell__subtitle">
+                            Review submitted timesheets and approve or send them back with feedback.
+                        </p>
+                    </div>
+                    <button
+                        v-if="canReviewApprovals"
+                        type="button"
+                        class="btn btn-primary approvals-shell__approve-all"
+                        :disabled="!pendingRows.length"
+                        @click="approveAllPending"
+                    >
+                        <Icon name="mdi:check-bold" />
+                        {{ selectedPendingRows.length ? `Approve ${selectedPendingRows.length} Selected` : "Approve All Pending" }}
+                    </button>
+                </header>
+
+                <div class="approvals-filters">
+                    <label class="approvals-filter">
+                        <span class="approvals-filter__label">Employee</span>
+                        <select v-model="employeeFilter">
+                            <option value="all">All Employees</option>
+                            <option v-for="option in employeeOptions" :key="option.id" :value="option.id">
+                                {{ option.name }}
+                            </option>
+                        </select>
+                    </label>
+
+                    <label class="approvals-filter">
+                        <span class="approvals-filter__label">Date Range</span>
+                        <select v-model="periodFilter">
+                            <option value="all">All Periods</option>
+                            <option v-for="option in periodOptions" :key="option.key" :value="option.key">
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </label>
+
+                    <label class="approvals-filter approvals-filter--status">
+                        <span class="approvals-filter__label">Status</span>
+                        <select v-model="statusFilter">
+                            <option value="all">All Statuses</option>
+                            <option value="pending">Pending Approval</option>
+                            <option value="approved">Approved</option>
+                            <option value="rejected">Rejected</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div v-if="canReviewApprovals && filteredApprovals.length" class="approval-list">
+                    <div class="approval-list__head approval-grid">
+                        <label class="approval-list__check">
+                            <input
+                                type="checkbox"
+                                :checked="allFilteredPendingSelected"
+                                :disabled="!pendingRows.length"
+                                @change="toggleSelectAll"
+                            />
+                        </label>
+                        <span>Employee</span>
+                        <span>Period</span>
+                        <span>Total Hours</span>
+                        <span>Status</span>
+                        <span class="approval-list__actions-title">Actions</span>
+                    </div>
+
+                    <article
+                        v-for="row in filteredApprovals"
+                        :key="row.id"
+                        class="approval-row"
+                        :class="rowStateClass(row.status)"
+                    >
+                        <div class="approval-grid approval-row__summary">
+                            <label class="approval-list__check">
+                                <input
+                                    type="checkbox"
+                                    :checked="isSelected(row.id)"
+                                    :disabled="row.status !== 1"
+                                    @change="toggleSelectRow(row.id)"
+                                />
+                            </label>
+
+                            <div class="approval-person">
+                                <div class="approval-person__avatar">{{ initialsFor(row.userId as string) }}</div>
+                                <div>
+                                    <div class="approval-person__name">{{ displayName(row.userId as string) }}</div>
+                                    <div class="approval-person__meta">
+                                        Submitted {{ row.submittedAtUtc ? longDate(row.submittedAtUtc) : "recently" }}
+                                    </div>
                                 </div>
-                            </td>
-                            <td>
-                                <div class="approvals__week">
-                                    <span>{{ formatDateDisplay(row.weekStartDate) }}</span>
-                                    <span class="approvals__week-sep">→</span>
-                                    <span>{{ formatDateDisplay(row.weekEndDate) }}</span>
-                                </div>
-                                <button
-                                    type="button"
-                                    class="link-btn approvals__details-toggle"
-                                    :disabled="row.isApproving || row.isRejecting"
-                                    @click="toggleDetails(row)"
-                                >
-                                    {{ row.isExpanded ? "Hide submitted rows" : "View submitted rows" }}
-                                </button>
-                            </td>
-                            <td>
-                                <div class="approvals__total">
-                                    <span class="approvals__total-hours">
-                                        {{ formatMinutes(row.totalMinutes as number) }}
-                                    </span>
-                                </div>
-                            </td>
-                            <td>{{ row.submittedAtUtc ? formatDateDisplay(row.submittedAtUtc) : "—" }}</td>
-                            <td class="approvals-table__actions">
-                                <div class="approvals__row-actions">
+                            </div>
+
+                            <div class="approval-period">
+                                {{ formatPeriodLabel(row.weekStartDate, row.weekEndDate) }}
+                            </div>
+
+                            <div class="approval-hours">
+                                {{ formatHours(row.totalMinutes, row.totalHours) }}
+                            </div>
+
+                            <div>
+                                <span class="approval-badge" :class="statusClass(row.status)">
+                                    {{ statusLabel(row.status) }}
+                                </span>
+                                <p v-if="row.activityNote" class="approval-activity">{{ row.activityNote }}</p>
+                            </div>
+
+                            <div class="approval-actions">
+                                <template v-if="row.status === 1">
                                     <button
                                         type="button"
-                                        class="btn btn-primary btn-sm"
+                                        class="approval-icon-btn approval-icon-btn--approve"
                                         :disabled="row.isApproving || row.isRejecting"
                                         @click="approveTimesheet(row)"
                                     >
-                                        {{ row.isApproving ? "Approving…" : "Approve" }}
+                                        <Icon name="mdi:check" />
                                     </button>
                                     <button
                                         type="button"
-                                        class="btn btn-secondary btn-sm"
-                                        :disabled="row.isRejecting || row.isApproving"
-                                        @click="rejectTimesheet(row)"
-                                    >
-                                        {{ row.isRejecting ? "Rejecting…" : "Reject" }}
-                                    </button>
-                                </div>
-                                <div class="approvals__reject">
-                                    <input
-                                        v-model="row.rejectReason"
-                                        type="text"
-                                        class="table-input"
-                                        placeholder="Rejection reason"
+                                        class="approval-icon-btn approval-icon-btn--reject"
                                         :disabled="row.isApproving || row.isRejecting"
-                                    />
-                                </div>
-                                <div v-if="row.error" class="alert alert--inline">
-                                    {{ row.error.message }}
-                                </div>
-                            </td>
-                        </tr>
-                        <tr v-if="row.isExpanded" class="approvals__details-row">
-                            <td :colspan="5">
-                                <div class="approvals__details">
-                                    <div class="approvals__details-head">
-                                        <strong>Submitted rows</strong>
-                                        <span class="muted">{{ row.entries?.length ?? 0 }} row(s)</span>
-                                    </div>
+                                        @click="openRejectPanel(row)"
+                                    >
+                                        <Icon name="mdi:close" />
+                                    </button>
+                                </template>
+                                <button type="button" class="approval-details-btn" @click="toggleDetails(row)">
+                                    {{ row.isExpanded ? "Hide" : "Details" }}
+                                </button>
+                            </div>
+                        </div>
 
-                                    <p v-if="row.entriesLoading" class="muted">Loading rowsâ€¦</p>
-                                    <div v-else-if="row.entriesError" class="alert alert--inline">
-                                        {{ row.entriesError.message }}
+                        <div v-if="row.isRejectPanelOpen && row.status === 1" class="approval-row__reject-panel">
+                            <label class="approval-reject">
+                                <span class="approval-reject__label">Rejection reason</span>
+                                <textarea
+                                    v-model="row.rejectReason"
+                                    rows="2"
+                                    placeholder="Add context for the employee before rejecting this timesheet."
+                                />
+                            </label>
+                            <div class="approval-reject__actions">
+                                <button type="button" class="btn btn-secondary" @click="openRejectPanel(row)">
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    class="btn approval-reject__submit"
+                                    :disabled="row.isRejecting || row.isApproving"
+                                    @click="rejectTimesheet(row)"
+                                >
+                                    {{ row.isRejecting ? "Rejecting…" : "Reject timesheet" }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div v-if="row.error" class="alert alert--inline approval-row__error">
+                            {{ row.error.message }}
+                        </div>
+
+                        <div v-if="row.isExpanded" class="approval-row__details">
+                            <div class="approval-detail-card">
+                                <div class="approval-detail-card__head approval-detail-grid">
+                                    <span>Date</span>
+                                    <span>Project</span>
+                                    <span>Activity</span>
+                                    <span>Hours</span>
+                                </div>
+
+                                <p v-if="row.entriesLoading" class="muted">Loading submitted rows…</p>
+                                <div v-else-if="row.entriesError" class="alert alert--inline">
+                                    {{ row.entriesError.message }}
+                                </div>
+                                <div v-else-if="row.entries?.length">
+                                    <div
+                                        v-for="entry in row.entries"
+                                        :key="entry.id"
+                                        class="approval-detail-grid approval-detail-card__row"
+                                    >
+                                        <span>{{ dayDate(entry.workDate) }}</span>
+                                        <span>{{ projectName(entry.projectId) }}</span>
+                                        <span>{{ entry.notes || "No notes provided" }}</span>
+                                        <strong>{{ formatHours(entry.durationMinutes ?? 0) }}</strong>
                                     </div>
-                                    <table v-else-if="row.entries?.length" class="entries-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Work date</th>
-                                                <th>Project</th>
-                                                <th>Duration</th>
-                                                <th>Start</th>
-                                                <th>End</th>
-                                                <th>Notes</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr v-for="e in row.entries" :key="e.id">
-                                                <td>{{ formatDateDisplay(e.workDate) }}</td>
-                                                <td>{{ projectName(e.projectId) }}</td>
-                                                <td>{{ formatMinutes(e.durationMinutes ?? 0) }}</td>
-                                                <td>{{ e.startTime ?? "â€”" }}</td>
-                                                <td>{{ e.endTime ?? "â€”" }}</td>
-                                                <td>{{ e.notes ?? "â€”" }}</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                    <p v-else class="muted">No rows found for this timesheet.</p>
                                 </div>
-                            </td>
-                        </tr>
-                        </template>
-                    </tbody>
-                </table>
-                <table class="approvals-table" v-else-if="!canReviewApprovals && mySubmissions.length">
-                    <thead>
-                        <tr>
-                            <th>Week</th>
-                            <th>Status</th>
-                            <th>Total</th>
-                            <th>Submitted</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr v-for="row in mySubmissions" :key="row.id">
-                            <td>
-                                <div class="approvals__week">
-                                    <span>{{ formatDateDisplay(row.weekStartDate) }}</span>
-                                    <span class="approvals__week-sep">→</span>
-                                    <span>{{ formatDateDisplay(row.weekEndDate) }}</span>
-                                </div>
-                            </td>
-                            <td>{{ statusLabel(row.status) }}</td>
-                            <td>{{ formatMinutes(row.totalMinutes) }}</td>
-                            <td>{{ row.submittedAtUtc ? formatDateDisplay(row.submittedAtUtc) : "—" }}</td>
-                        </tr>
-                    </tbody>
-                </table>
-                <p v-else class="muted">
-                    {{ canReviewApprovals ? "No pending approvals." : "No submissions yet." }}
-                </p>
-            </div>
+                                <p v-else class="muted">No submitted rows found for this timesheet.</p>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+
+                <div v-else-if="canReviewApprovals" class="approvals-empty">
+                    <Icon name="mdi:clipboard-check-outline" />
+                    <div>
+                        <h2>No approvals match these filters</h2>
+                        <p>Try changing the employee, date range, or status filter.</p>
+                    </div>
+                </div>
+
+                <div v-else class="approvals-empty">
+                    <Icon name="mdi:account-lock-outline" />
+                    <div>
+                        <h2>Approvals are unavailable</h2>
+                        <p>You need manager or approver access to review timesheets for {{ org?.name ?? "this organization" }}.</p>
+                    </div>
+                </div>
+
+                <footer v-if="canReviewApprovals" class="approvals-shell__footer">
+                    <p>
+                        Showing {{ filteredPendingCount }} pending {{ filteredPendingCount === 1 ? "timesheet" : "timesheets" }}
+                        for {{ employeeFilter === "all" ? "all employees" : displayName(employeeFilter) }}.
+                    </p>
+                    <p><strong>{{ (totalPendingHours / 60).toFixed(1) }}</strong> total hours pending approval</p>
+                </footer>
+            </section>
         </template>
     </section>
 </template>
 
 <style scoped>
-.approvals {
+.approvals-page {
+    display: grid;
+}
+
+.approvals-page__alert {
     padding: var(--s-5);
 }
 
-.approvals__header {
+.approvals-shell {
+    border-radius: 28px;
+    padding: var(--s-6);
+    display: grid;
+    gap: var(--s-5);
+}
+
+.approvals-shell--loading {
+    min-height: 260px;
+    place-items: center;
+}
+
+.approvals-shell__header {
     display: flex;
-    flex-wrap: wrap;
+    align-items: flex-start;
     justify-content: space-between;
-    align-items: flex-end;
-    gap: var(--s-4);
-    margin-bottom: var(--s-4);
+    gap: var(--s-5);
+    flex-wrap: wrap;
 }
 
-.approvals__title {
-    margin: 0 0 var(--s-1) 0;
-    font-size: 1.5rem;
-}
-
-.approvals__subtitle {
-    margin: 0;
-    color: var(--text-2);
+.approvals-shell__breadcrumb {
+    margin: 0 0 var(--s-2);
+    color: #98a2b3;
     font-size: 0.95rem;
 }
 
-.approvals__meta {
-    text-align: right;
+.approvals-shell__breadcrumb span {
+    margin: 0 8px;
 }
 
-.approvals__meta-label {
-    font-size: 0.75rem;
+.approvals-shell__title {
+    margin: 0;
+    font-size: 2rem;
     font-weight: 700;
+}
+
+.approvals-shell__subtitle {
+    margin: var(--s-2) 0 0;
+    color: var(--text-2);
+    max-width: 620px;
+    line-height: 1.5;
+}
+
+.approvals-shell__approve-all {
+    min-width: 220px;
+    min-height: 50px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    box-shadow: 0 18px 34px rgba(15, 118, 110, 0.18);
+}
+
+.approvals-shell__approve-all:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.approvals-filters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(220px, 0.9fr);
+    gap: var(--s-4);
+}
+
+.approvals-filter {
+    display: grid;
+    gap: 10px;
+}
+
+.approvals-filter__label {
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
+    color: #667085;
 }
 
-.approvals__meta-value {
-    display: block;
-    font-weight: 600;
-    font-size: 1.1rem;
+.approvals-filter select {
+    min-height: 50px;
+    padding: 0 14px;
+    background: #fff;
 }
 
-.approvals__table-wrap {
-    overflow-x: auto;
+.approval-list {
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    overflow: hidden;
+    background: #fff;
 }
 
-.approvals-table {
-    width: 100%;
-    border-collapse: collapse;
+.approval-grid,
+.approval-detail-grid {
+    display: grid;
+    grid-template-columns: 44px minmax(230px, 1.55fr) minmax(190px, 1.1fr) minmax(130px, 0.85fr) minmax(130px, 0.8fr) minmax(170px, 0.95fr);
+    gap: var(--s-3);
+    align-items: center;
 }
 
-.approvals-table th,
-.approvals-table td {
-    padding: var(--s-3) var(--s-4);
-    text-align: left;
+.approval-list__head {
+    padding: 20px 24px;
+    background: #fbfcfe;
     border-bottom: 1px solid var(--border);
-    vertical-align: top;
-}
-
-.approvals-table tbody tr:not(.approvals__details-row):hover td {
-    background: var(--surface-2);
-}
-
-.approvals-table th {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     font-weight: 700;
+    color: #667085;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
 }
 
-.approvals-table__actions {
-    width: 280px;
+.approval-list__actions-title {
+    justify-self: end;
 }
 
-.approvals__employee {
+.approval-list__check {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    justify-content: center;
 }
 
-.approvals__employee-name {
-    font-weight: 600;
+.approval-list__check input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--primary);
 }
 
-.approvals__week {
+.approval-row {
+    border-bottom: 1px solid var(--border);
+}
+
+.approval-row:last-child {
+    border-bottom: 0;
+}
+
+.approval-row--approved {
+    background: linear-gradient(90deg, rgba(234, 248, 239, 0.52), rgba(255, 255, 255, 0));
+}
+
+.approval-row--rejected {
+    background: linear-gradient(90deg, rgba(253, 236, 236, 0.56), rgba(255, 255, 255, 0));
+}
+
+.approval-row__summary {
+    padding: 22px 24px;
+}
+
+.approval-person {
     display: flex;
     align-items: center;
-    gap: var(--s-1);
-    font-weight: 600;
+    gap: 14px;
 }
 
-.approvals__week-sep {
-    color: var(--text-3);
+.approval-person__avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, #fde7dc, #f4b67a);
+    color: #8c4d17;
+    font-weight: 700;
+    letter-spacing: 0.03em;
 }
 
-.approvals__total-hours {
-    font-weight: 600;
+.approval-person__name {
+    font-size: 1.2rem;
+    font-weight: 700;
 }
 
-.link-btn {
-    appearance: none;
+.approval-person__meta,
+.approval-activity {
+    margin: 4px 0 0;
+    color: var(--text-2);
+    font-size: 0.92rem;
+}
+
+.approval-period,
+.approval-hours {
+    font-size: 1rem;
+    color: #344054;
+}
+
+.approval-hours {
+    font-weight: 700;
+    font-size: 1.15rem;
+    color: #101828;
+}
+
+.approval-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 92px;
+    padding: 7px 14px;
+    border-radius: var(--r-pill);
+    font-size: 0.92rem;
+    border: 1px solid transparent;
+}
+
+.approval-badge--pending {
+    color: var(--warning);
+    border-color: rgba(217, 119, 6, 0.2);
+    background: var(--warning-soft);
+}
+
+.approval-badge--approved {
+    color: #027a48;
+    border-color: #b7ebcc;
+    background: #ecfdf3;
+}
+
+.approval-badge--rejected {
+    color: #b42318;
+    border-color: #f5c2be;
+    background: #fef3f2;
+}
+
+.approval-badge--draft {
+    color: #475467;
+    border-color: #d0d5dd;
+    background: #f2f4f7;
+}
+
+.approval-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.approval-icon-btn,
+.approval-details-btn {
     border: 0;
     background: transparent;
-    color: var(--primary);
     font: inherit;
-    text-align: left;
+}
+
+.approval-icon-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: inline-grid;
+    place-items: center;
+    color: #fff;
     cursor: pointer;
-    text-decoration: underline;
-    text-underline-offset: 3px;
 }
 
-.link-btn:disabled {
-    opacity: 0.6;
+.approval-icon-btn:disabled {
+    opacity: 0.55;
     cursor: not-allowed;
-    text-decoration: none;
 }
 
-.link-btn:not(:disabled):hover {
-    filter: brightness(0.95);
+.approval-icon-btn--approve {
+    background: #98a2b3;
 }
 
-.approvals__details-toggle {
-    margin-top: var(--s-1);
-    padding: 0;
-    font-size: 0.875rem;
+.approval-icon-btn--approve:hover:not(:disabled) {
+    background: var(--primary);
 }
 
-.approvals__details-row td {
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border);
+.approval-icon-btn--reject {
+    background: #98a2b3;
 }
 
-.approvals__details {
-    padding: var(--s-3);
+.approval-icon-btn--reject:hover:not(:disabled) {
+    background: #b42318;
+}
+
+.approval-details-btn {
+    color: var(--primary);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.approval-details-btn:hover {
+    text-decoration: underline;
+}
+
+.approval-row__reject-panel,
+.approval-row__details {
+    padding: 0 24px 24px;
+}
+
+.approval-reject {
     display: grid;
     gap: var(--s-2);
 }
 
-.approvals__details-head {
+.approval-reject__label {
+    font-weight: 600;
+    color: #344054;
+}
+
+.approval-reject textarea {
+    resize: vertical;
+    min-height: 84px;
+}
+
+.approval-reject__actions {
     display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: var(--s-2);
+    justify-content: flex-end;
+    gap: var(--s-3);
+    margin-top: var(--s-3);
 }
 
-.entries-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: var(--surface);
+.approval-reject__submit {
+    background: #b42318;
+    color: #fff;
+}
+
+.approval-row__error {
+    margin: 0 24px 24px;
+}
+
+.approval-detail-card {
     border: 1px solid var(--border);
-    border-radius: var(--r-sm);
+    border-radius: 18px;
     overflow: hidden;
+    background: #fff;
 }
 
-.entries-table th,
-.entries-table td {
-    padding: var(--s-2) var(--s-3);
-    text-align: left;
+.approval-detail-card__head,
+.approval-detail-card__row {
+    padding: 18px 20px;
+}
+
+.approval-detail-card__head {
+    background: #fbfcfe;
     border-bottom: 1px solid var(--border);
-    vertical-align: top;
-}
-
-.entries-table th {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     font-weight: 700;
+    color: #98a2b3;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
 }
 
-.entries-table tr:last-child td {
+.approval-detail-card__row {
+    border-bottom: 1px solid var(--border);
+    color: #344054;
+}
+
+.approval-detail-card__row:last-child {
     border-bottom: 0;
 }
 
-.approvals__row-actions {
+.approval-detail-grid {
+    grid-template-columns: minmax(150px, 1fr) minmax(180px, 1fr) minmax(240px, 1.4fr) minmax(90px, 0.5fr);
+}
+
+.approvals-empty {
+    min-height: 260px;
+    border: 1px dashed var(--border);
+    border-radius: 22px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    gap: var(--s-3);
+    color: var(--text-2);
+    padding: var(--s-6);
+}
+
+.approvals-empty :deep(svg) {
+    font-size: 2.4rem;
+    color: var(--primary);
+}
+
+.approvals-empty h2 {
+    margin: 0 0 var(--s-2);
+    color: var(--text-1);
+}
+
+.approvals-empty p,
+.approvals-shell__footer p,
+.muted {
+    margin: 0;
+}
+
+.approvals-shell__footer {
     display: flex;
-    gap: var(--s-2);
+    justify-content: space-between;
+    gap: var(--s-4);
+    color: var(--text-2);
+    font-size: 0.98rem;
     flex-wrap: wrap;
 }
 
-.approvals__reject {
-    margin-top: var(--s-2);
-}
-
 .alert--inline {
-    margin-top: var(--s-2);
-    padding: var(--s-2);
-    font-size: 0.875rem;
+    padding: var(--s-3);
 }
 
-.muted {
-    margin: 0;
-    color: var(--text-2);
+@media (max-width: 1200px) {
+    .approval-grid {
+        grid-template-columns: 34px minmax(220px, 1.4fr) minmax(180px, 1fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr) minmax(150px, 0.9fr);
+    }
+}
+
+@media (max-width: 960px) {
+    .approvals-shell {
+        padding: var(--s-5);
+    }
+
+    .approvals-filters,
+    .approval-grid,
+    .approval-detail-grid,
+    .approvals-shell__footer {
+        grid-template-columns: 1fr;
+    }
+
+    .approval-list__head {
+        display: none;
+    }
+
+    .approval-row__summary {
+        gap: var(--s-4);
+    }
+
+    .approval-list__check {
+        justify-content: flex-start;
+    }
+
+    .approval-actions,
+    .approval-reject__actions {
+        justify-content: flex-start;
+    }
+
+    .approval-row__reject-panel,
+    .approval-row__details {
+        padding: 0 20px 20px;
+    }
 }
 </style>
