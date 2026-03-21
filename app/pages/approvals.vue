@@ -1,7 +1,7 @@
 <script setup lang="ts">
 definePageMeta({ middleware: ["auth"] })
 
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
@@ -30,8 +30,14 @@ const loading = ref(true)
 const error = ref<UiError | null>(null)
 const selectedIds = ref<string[]>([])
 const employeeFilter = ref("all")
-const periodFilter = ref("all")
 const statusFilter = ref("all")
+const dateMode = ref<"week" | "custom">("week")
+const currentWeekStart = computed(() => formatDateForInput(getWeekStart(new Date())))
+const weekStartDate = ref(currentWeekStart.value)
+const weekLabel = computed(() => `Week of ${weekStartDate.value}`)
+const isCurrentWeek = computed(() => weekStartDate.value === currentWeekStart.value)
+const customFromDate = ref("")
+const customToDate = ref("")
 
 const { user } = useAuth()
 
@@ -75,32 +81,12 @@ const employeeOptions = computed(() => {
         .sort((a, b) => a.name.localeCompare(b.name))
 })
 
-const periodOptions = computed(() => {
-    const seen = new Set<string>()
-    return approvals.value
-        .map((row) => {
-            const key = `${row.weekStartDate ?? ""}_${row.weekEndDate ?? ""}`
-            return {
-                key,
-                label: formatPeriodLabel(row.weekStartDate, row.weekEndDate),
-            }
-        })
-        .filter((option) => {
-            if (seen.has(option.key)) return false
-            seen.add(option.key)
-            return true
-        })
-        .sort((a, b) => a.label.localeCompare(b.label))
-})
-
 const filteredApprovals = computed(() =>
     approvals.value.filter((row) => {
         const employeeMatch = employeeFilter.value === "all" || row.userId === employeeFilter.value
-        const periodKey = `${row.weekStartDate ?? ""}_${row.weekEndDate ?? ""}`
-        const periodMatch = periodFilter.value === "all" || periodKey === periodFilter.value
         const rowStatus = statusKey(row.status)
         const statusMatch = statusFilter.value === "all" || rowStatus === statusFilter.value
-        return employeeMatch && periodMatch && statusMatch
+        return employeeMatch && statusMatch
     })
 )
 
@@ -269,11 +255,21 @@ async function loadApprovals() {
             projectsApi.list(firstOrg.id),
         ])
         let approvalsResult: Timesheet[] = []
+        const rangeParams =
+            dateMode.value === "week"
+                ? {
+                    fromWeekStart: weekStartDate.value,
+                    toWeekStart: weekStartDate.value,
+                }
+                : {
+                    ...(customFromDate.value ? { fromWeekStart: customFromDate.value } : {}),
+                    ...(customToDate.value ? { toWeekStart: customToDate.value } : {}),
+                }
         try {
-            approvalsResult = await timesheetsApi.listOrg(firstOrg.id)
+            approvalsResult = await timesheetsApi.listOrg(firstOrg.id, rangeParams)
         } catch (cause) {
             console.warn("Falling back to pending-approval list for approvals page:", cause)
-            approvalsResult = await timesheetsApi.listPendingApproval(firstOrg.id)
+            approvalsResult = await timesheetsApi.listPendingApproval(firstOrg.id, rangeParams)
         }
         members.value = membersResult
         projects.value = projectsResult
@@ -375,7 +371,38 @@ async function toggleDetails(row: ApprovalRow) {
     }
 }
 
+function moveWeek(offset: number) {
+    const current = new Date(`${weekStartDate.value}T00:00:00`)
+    if (Number.isNaN(current.getTime())) return
+    current.setDate(current.getDate() + offset * 7)
+    weekStartDate.value = formatDateForInput(getWeekStart(current))
+}
+
+function goToCurrentWeek() {
+    if (isCurrentWeek.value) return
+    weekStartDate.value = currentWeekStart.value
+}
+
+function getWeekStart(date: Date) {
+    const start = new Date(date)
+    const day = start.getDay()
+    const diff = (day + 6) % 7
+    start.setDate(start.getDate() - diff)
+    start.setHours(0, 0, 0, 0)
+    return start
+}
+
+function formatDateForInput(date: Date) {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, "0")
+    const day = String(date.getDate()).padStart(2, "0")
+    return `${year}-${month}-${day}`
+}
+
 onMounted(loadApprovals)
+watch([weekStartDate, dateMode, customFromDate, customToDate], () => {
+    void loadApprovals()
+})
 </script>
 
 <template>
@@ -423,15 +450,49 @@ onMounted(loadApprovals)
                         </select>
                     </label>
 
-                    <label class="approvals-filter">
-                        <span class="approvals-filter__label">Date Range</span>
-                        <select v-model="periodFilter">
-                            <option value="all">All Periods</option>
-                            <option v-for="option in periodOptions" :key="option.key" :value="option.key">
-                                {{ option.label }}
-                            </option>
-                        </select>
-                    </label>
+                    <div class="approvals-filter approvals-filter--date">
+                        <div class="approvals-filter__head">
+                            <span class="approvals-filter__label">Date Range</span>
+                            <div class="approvals-date-mode">
+                                <button
+                                    type="button"
+                                    class="approvals-date-mode__btn"
+                                    :class="{ 'approvals-date-mode__btn--active': dateMode === 'week' }"
+                                    @click="dateMode = 'week'"
+                                >
+                                    Week
+                                </button>
+                                <button
+                                    type="button"
+                                    class="approvals-date-mode__btn"
+                                    :class="{ 'approvals-date-mode__btn--active': dateMode === 'custom' }"
+                                    @click="dateMode = 'custom'"
+                                >
+                                    Any to any
+                                </button>
+                            </div>
+                        </div>
+
+                        <div v-if="dateMode === 'week'" class="approvals-week-nav">
+                            <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(-1)">Previous</button>
+                            <span class="approvals-week-nav__label">{{ weekLabel }}</span>
+                            <button type="button" class="btn btn-secondary btn-sm" :disabled="isCurrentWeek" @click="goToCurrentWeek">
+                                This week
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" @click="moveWeek(1)">Next</button>
+                        </div>
+
+                        <div v-else class="approvals-custom-range">
+                            <label>
+                                <span class="approvals-filter__label">From</span>
+                                <input v-model="customFromDate" type="date" />
+                            </label>
+                            <label>
+                                <span class="approvals-filter__label">To</span>
+                                <input v-model="customToDate" type="date" />
+                            </label>
+                        </div>
+                    </div>
 
                     <label class="approvals-filter approvals-filter--status">
                         <span class="approvals-filter__label">Status</span>
@@ -589,7 +650,7 @@ onMounted(loadApprovals)
                     <Icon name="mdi:clipboard-check-outline" />
                     <div>
                         <h2>No approvals match these filters</h2>
-                        <p>Try changing the employee, date range, or status filter.</p>
+                        <p>Try changing the employee, week/range, or status filter.</p>
                     </div>
                 </div>
 
@@ -683,6 +744,13 @@ onMounted(loadApprovals)
     gap: 10px;
 }
 
+.approvals-filter__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+}
+
 .approvals-filter__label {
     font-size: 0.8rem;
     font-weight: 700;
@@ -695,6 +763,57 @@ onMounted(loadApprovals)
     min-height: 42px;
     padding: 0 14px;
     background: var(--surface);
+}
+
+.approvals-date-mode {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+}
+
+.approvals-date-mode__btn {
+    border: 0;
+    background: var(--surface);
+    color: var(--text-2);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+
+.approvals-date-mode__btn + .approvals-date-mode__btn {
+    border-left: 1px solid var(--border);
+}
+
+.approvals-date-mode__btn--active {
+    background: var(--primary-soft);
+    color: var(--primary);
+}
+
+.approvals-week-nav {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+}
+
+.approvals-week-nav__label {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text-1);
+}
+
+.approvals-custom-range {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s-2);
+}
+
+.approvals-custom-range label {
+    display: grid;
+    gap: 6px;
 }
 
 .approval-list {
@@ -1010,6 +1129,10 @@ onMounted(loadApprovals)
     .approval-grid,
     .approval-detail-grid,
     .approvals-shell__footer {
+        grid-template-columns: 1fr;
+    }
+
+    .approvals-custom-range {
         grid-template-columns: 1fr;
     }
 
