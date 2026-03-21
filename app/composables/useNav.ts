@@ -13,6 +13,7 @@ export type NavGroup = {
 }
 
 const employeeOnlyRoutes = new Set([
+    "/dashboard",
     "/track",
     "/timesheets",
     "/projects",
