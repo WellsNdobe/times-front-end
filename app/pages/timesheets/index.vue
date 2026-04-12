@@ -2,6 +2,8 @@
 definePageMeta({ middleware: ["auth"] })
 
 import { computed, onMounted, ref } from "vue"
+import ProjectSelectField from "~/components/projects/ProjectSelectField.vue"
+import { useAuth } from "~/composables/useAuth"
 import { organizationsApi, type Organization } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import {
@@ -29,6 +31,7 @@ type WorkingDay = {
 }
 
 const WEEK_DAY_COUNT = 7
+const { user } = useAuth()
 
 const org = ref<Organization | null>(null)
 const projects = ref<Project[]>([])
@@ -98,6 +101,14 @@ const readOnlyBannerMessage = computed(() => {
     }
     return ""
 })
+const hasProjects = computed(() => projects.value.length > 0)
+const canCreateProject = computed(() => {
+    const userId = user.value?.userId
+    const members = org.value?.members
+    if (!userId || !Array.isArray(members)) return false
+    const member = members.find((entry) => entry && entry.userId === userId)
+    return member?.role === 0 || member?.role === 1
+})
 
 const workingDays = computed<WorkingDay[]>(() => getWorkingDays(weekStartDate.value))
 const entriesByWorkDate = computed(() => {
@@ -123,7 +134,7 @@ function dayTotalMinutes(date: string) {
 }
 
 function addEntryRow(workDate: string) {
-    if (!timesheet.value?.id) return
+    if (!timesheet.value?.id || !hasProjects.value) return
     const row: TimesheetEntryRow = {
         id: `new-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         isNew: true,
@@ -151,7 +162,15 @@ async function loadTimesheet() {
         }
         org.value = orgs[0] ?? null
         if (!org.value?.id) return
-        projects.value = await projectsApi.list(org.value.id)
+        const [projectsResult, membersResult] = await Promise.all([
+            projectsApi.list(org.value.id),
+            organizationsApi.getMembers(org.value.id),
+        ])
+        projects.value = projectsResult
+        org.value = {
+            ...org.value,
+            members: membersResult,
+        }
         await loadSelectedWeek()
     } catch (e) {
         error.value = toUiError(e)
@@ -450,6 +469,17 @@ onMounted(() => {
             </div>
 
             <div v-else class="timesheets__days">
+                <section v-if="!hasProjects" class="timesheets__project-guide">
+                    <ProjectSelectField
+                        model-value=""
+                        :projects="projects"
+                        :can-create-project="canCreateProject"
+                        source="timesheets"
+                        return-to="/timesheets"
+                        compact
+                    />
+                </section>
+
                 <section v-for="day in workingDays" :key="day.key" class="timesheets-day">
                     <header class="timesheets-day__header">
                         <div>
@@ -464,10 +494,16 @@ onMounted(() => {
                             <button
                                 type="button"
                                 class="btn btn-primary btn-sm"
-                                :disabled="loading || !timesheet || !isEditable"
+                                :disabled="loading || !timesheet || !isEditable || !hasProjects"
                                 @click="addEntryRow(day.date)"
                             >
-                                {{ isEditable ? "Add row" : "Rows locked" }}
+                                {{
+                                    !hasProjects
+                                        ? "Create a project first"
+                                        : isEditable
+                                            ? "Add row"
+                                            : "Rows locked"
+                                }}
                             </button>
                         </div>
                     </header>
@@ -487,10 +523,16 @@ onMounted(() => {
                             <tbody>
                                 <tr v-for="entry in dayEntries(day.date)" :key="entry.id">
                                     <td>
-                                        <select v-model="entry.projectId" :disabled="!isEditable">
-                                            <option value="">Select project</option>
-                                            <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
-                                        </select>
+                                        <ProjectSelectField
+                                            :model-value="entry.projectId"
+                                            :projects="projects"
+                                            :disabled="!isEditable"
+                                            :can-create-project="canCreateProject"
+                                            source="timesheets"
+                                            return-to="/timesheets"
+                                            compact
+                                            @update:model-value="entry.projectId = $event"
+                                        />
                                     </td>
                                     <td>
                                         <input :value="entry.durationMinutes ?? ''" type="number" min="0" step="1" :disabled="!isEditable" @input="onDurationInput(entry, $event)" />
@@ -551,6 +593,7 @@ onMounted(() => {
 .timesheets__readonly-banner { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); color: var(--text-2); margin-bottom: var(--s-3); padding: var(--s-3) var(--s-4); }
 .timesheets__empty-week { border: 1px dashed var(--border); border-radius: var(--r-md); padding: var(--s-4); display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--s-3); }
 .timesheets__days { display: grid; gap: var(--s-4); }
+.timesheets__project-guide { margin: 0; }
 .timesheets-day { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
 .timesheets-day__header { padding: var(--s-3) var(--s-4); background: var(--surface-2); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
 .timesheets-day__header h2 { margin: 0; font-size: 1rem; }

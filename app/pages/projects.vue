@@ -2,6 +2,7 @@
 definePageMeta({ middleware: ["auth"] })
 
 import { computed, onMounted, ref } from "vue"
+import { useRoute } from "vue-router"
 import ProjectsCreatePanel from "~/components/projects/CreatePanel.vue"
 import ProjectsFilterBar from "~/components/projects/FilterBar.vue"
 import ProjectsHero from "~/components/projects/Hero.vue"
@@ -33,6 +34,7 @@ const defaultFilters = (): ProjectFilters => ({
 })
 
 const { user } = useAuth()
+const route = useRoute()
 
 const org = ref<Organization | null>(null)
 const clients = ref<Client[]>([])
@@ -156,6 +158,16 @@ const assignmentItems = computed(() =>
 const approverItems = computed(() =>
     approvers.value.map((approver) => ({ id: approver.userId, label: memberDisplayNameByUserId(approver.userId) }))
 )
+const returnTo = computed(() => {
+    const rawValue = route.query.returnTo
+    const value = typeof rawValue === "string" ? rawValue : ""
+    return isSafeInternalReturnTo(value) ? value : ""
+})
+const returnLabel = computed(() => {
+    if (returnTo.value === "/track") return "Back to Track Time"
+    if (returnTo.value === "/timesheets") return "Back to Timesheets"
+    return "Back"
+})
 
 function buildListParams(filters: ProjectFilters) {
     return {
@@ -452,7 +464,18 @@ function rowExpanded(projectId: string) {
     )
 }
 
-onMounted(loadInitial)
+function applyRouteInstructions() {
+    showAddForm.value = isManagerOrAdmin.value && route.query.create === "1"
+}
+
+function isSafeInternalReturnTo(value: string) {
+    return value.startsWith("/") && !value.startsWith("//")
+}
+
+onMounted(async () => {
+    await loadInitial()
+    applyRouteInstructions()
+})
 </script>
 
 <template>
@@ -468,6 +491,12 @@ onMounted(loadInitial)
             close-label="Close project form"
             @toggle-create="showAddForm = !showAddForm"
         />
+
+        <div v-if="returnTo" class="projects-page__return">
+            <NuxtLink :to="returnTo" class="btn btn-secondary">
+                {{ returnLabel }}
+            </NuxtLink>
+        </div>
 
         <div v-if="error" class="alert" role="alert">
             <div class="alert__title">{{ error.title }}</div>
@@ -694,6 +723,10 @@ onMounted(loadInitial)
 .projects-page {
     display: grid;
     gap: var(--s-4);
+}
+
+.projects-page__return {
+    display: flex;
 }
 
 .projects-page__loading,

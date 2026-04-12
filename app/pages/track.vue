@@ -3,6 +3,8 @@ definePageMeta({ middleware: ["auth"] })
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRoute } from "vue-router"
+import ProjectSelectField from "~/components/projects/ProjectSelectField.vue"
+import { useAuth } from "~/composables/useAuth"
 import { organizationsApi, type Organization } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { trackerApi, type ActiveTimerSession } from "~/api/trackerApi"
@@ -13,6 +15,7 @@ import { toUiError, type UiError } from "~/utils/errorMessages"
 type TrackerViewState = "idle" | "running" | "stopped_unsaved"
 
 const route = useRoute()
+const { user } = useAuth()
 
 const org = ref<Organization | null>(null)
 const projects = ref<Project[]>([])
@@ -96,6 +99,13 @@ const isProjectLocked = computed(
     () => trackerState.value !== "idle" || saving.value || !isTimesheetEditable.value
 )
 const isNotesDisabled = computed(() => saving.value || !isTimesheetEditable.value)
+const canCreateProject = computed(() => {
+    const userId = user.value?.userId
+    const members = org.value?.members
+    if (!userId || !Array.isArray(members)) return false
+    const member = members.find((entry) => entry && entry.userId === userId)
+    return member?.role === 0 || member?.role === 1
+})
 
 onMounted(() => loadTrackerData())
 onBeforeUnmount(() => {
@@ -136,12 +146,17 @@ async function loadTrackerData() {
             applyActiveSession(activeSession)
         }
 
-        const [projectsResult, timesheetResult] = await Promise.all([
+        const [projectsResult, timesheetResult, membersResult] = await Promise.all([
             projectsApi.list(firstOrg.id, { isActive: true }),
             loadTimesheetForWeek(firstOrg.id, getWeekStartDateString(todayKey.value)),
+            organizationsApi.getMembers(firstOrg.id),
         ])
 
         projects.value = projectsResult
+        org.value = {
+            ...firstOrg,
+            members: membersResult,
+        }
         timesheet.value = timesheetResult
         entries.value = timesheetResult
             ? await timesheetEntriesApi.list(firstOrg.id, timesheetResult.id)
@@ -191,6 +206,16 @@ async function startTimerSession() {
         localError.value = {
             title: "Timesheet locked",
             message: "This week's timesheet cannot be edited in its current state.",
+        }
+        return
+    }
+
+    if (!hasProjects.value) {
+        localError.value = {
+            title: "No projects yet",
+            message: canCreateProject.value
+                ? "Create a project first, then come back here to start tracking time."
+                : "A manager or admin needs to create a project before you can start tracking time.",
         }
         return
     }
@@ -529,12 +554,15 @@ function parseUtcDateTime(value: string) {
                 <div class="track-card__fields">
                     <label class="track-field">
                         <span>Select project</span>
-                        <select v-model="selectedProjectId" :disabled="isProjectLocked">
-                            <option value="">Select project</option>
-                            <option v-for="project in activeProjects" :key="project.id" :value="project.id">
-                                {{ project.name }}
-                            </option>
-                        </select>
+                        <ProjectSelectField
+                            :model-value="selectedProjectId"
+                            :projects="activeProjects"
+                            :disabled="isProjectLocked"
+                            :can-create-project="canCreateProject"
+                            source="track"
+                            return-to="/track"
+                            @update:model-value="selectedProjectId = $event"
+                        />
                     </label>
 
                     <label class="track-field track-field--notes">
@@ -589,7 +617,9 @@ function parseUtcDateTime(value: string) {
                     </template>
                 </div>
 
-                <p v-if="!hasProjects" class="muted">No active projects available.</p>
+                <p v-if="!hasProjects" class="muted track-card__hint">
+                    {{ canCreateProject ? "Create a project to unlock time tracking." : "A manager or admin must create a project first." }}
+                </p>
             </section>
 
             <div v-if="localError" class="alert alert--inline" role="alert">
@@ -839,6 +869,11 @@ function parseUtcDateTime(value: string) {
 
 .track-card__primary {
     min-width: 180px;
+}
+
+.track-card__hint {
+    margin-top: var(--s-4);
+    font-weight: 600;
 }
 
 .track-log {
