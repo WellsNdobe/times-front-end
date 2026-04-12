@@ -1,23 +1,29 @@
 <script setup lang="ts">
 definePageMeta({ middleware: ["auth"] })
 
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { organizationsApi, type Organization, type OrganizationMember } from "~/api/organizationsApi"
 import { projectsApi, type Project } from "~/api/projectsApi"
 import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
 import { timesheetEntriesApi, type TimesheetEntry } from "~/api/timesheetEntriesApi"
+import FilterBar from "~/components/approvals/FilterBar.vue"
+import QueueTable from "~/components/approvals/QueueTable.vue"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 import { useAuth } from "~/composables/useAuth"
 
 type ApprovalRow = Timesheet & {
-    isApproving?: boolean
-    isRejecting?: boolean
-    rejectReason?: string
-    isExpanded?: boolean
+    uiStatus: "pending" | "approved"
+    isApproving: boolean
+    isRejecting: boolean
+    rejectReason: string
+    rejectOpen: boolean
+    isExpanded: boolean
     entries?: TimesheetEntry[]
-    entriesLoading?: boolean
-    entriesError?: UiError | null
-    error?: UiError | null
+    entriesLoading: boolean
+    entriesError: UiError | null
+    error: UiError | null
+    approvedAtLabel?: string | null
+    recentlyApproved: boolean
 }
 
 const org = ref<Organization | null>(null)
@@ -28,11 +34,18 @@ const loading = ref(true)
 const error = ref<UiError | null>(null)
 const mySubmissions = ref<Timesheet[]>([])
 
+const filterEmployeeId = ref("all")
+const filterStatus = ref("pending")
+const filterDateFrom = ref("")
+const filterDateTo = ref("")
+const selectedIds = ref<string[]>([])
+const approvingAll = ref(false)
+
 const { user } = useAuth()
 
 const memberMap = computed(() => {
     const map = new Map<string, OrganizationMember>()
-    for (const m of members.value) map.set(m.userId, m)
+    for (const member of members.value) map.set(member.userId, member)
     return map
 })
 
@@ -42,9 +55,25 @@ const projectById = computed(() => {
     return map
 })
 
+const employeeOptions = computed(() => {
+    const map = new Map<string, string>()
+    for (const row of approvals.value) {
+        const userId = String(row.userId ?? "")
+        if (!userId) continue
+        map.set(userId, displayName(userId))
+    }
+
+    return [
+        { value: "all", label: "All Employees" },
+        ...[...map.entries()]
+            .map(([value, label]) => ({ value, label }))
+            .sort((left, right) => left.label.localeCompare(right.label)),
+    ]
+})
+
 const myMember = computed(() => {
     if (!user.value?.userId) return null
-    return members.value.find((m) => m.userId === user.value?.userId) ?? null
+    return members.value.find((member) => member.userId === user.value?.userId) ?? null
 })
 
 const isProjectApprover = computed(() => {
@@ -53,28 +82,108 @@ const isProjectApprover = computed(() => {
     return projects.value.some((project) => (project.approverUserIds as string[] | undefined)?.includes(userId))
 })
 
-const canReviewApprovals = computed(() => isProjectApprover.value || approvals.value.length > 0)
+const hasApprovalRole = computed(() => {
+    const role = myMember.value?.role
+    return role === 0 || role === 1
+})
+
+const canReviewApprovals = computed(() =>
+    hasApprovalRole.value || isProjectApprover.value || approvals.value.length > 0
+)
+
+const filteredApprovals = computed(() => {
+    const rows = approvals.value.filter((row) => {
+        if (filterEmployeeId.value !== "all" && row.userId !== filterEmployeeId.value) return false
+        if (filterStatus.value !== "all" && row.uiStatus !== filterStatus.value) return false
+        if (filterDateFrom.value && (row.weekStartDate ?? "") < filterDateFrom.value) return false
+        if (filterDateTo.value && (row.weekEndDate ?? row.weekStartDate ?? "") > filterDateTo.value) return false
+        return true
+    })
+
+    return [...rows].sort((left, right) => {
+        if (left.uiStatus !== right.uiStatus) return left.uiStatus === "pending" ? -1 : 1
+        return (left.weekStartDate ?? "").localeCompare(right.weekStartDate ?? "")
+    })
+})
+
+const pendingRows = computed(() => filteredApprovals.value.filter((row) => row.uiStatus === "pending"))
+const pendingQueueCount = computed(() => approvals.value.filter((row) => row.uiStatus === "pending").length)
+const pendingHoursTotal = computed(() =>
+    approvals.value
+        .filter((row) => row.uiStatus === "pending")
+        .reduce((sum, row) => sum + resolveHours(row), 0)
+)
+
+const allPendingSelected = computed(() => {
+    if (!pendingRows.value.length) return false
+    return pendingRows.value.every((row) => selectedIds.value.includes(row.id))
+})
+
+const queueRows = computed(() =>
+    filteredApprovals.value.map((row) => ({
+        id: row.id,
+        employeeName: displayName(row.userId as string),
+        employeeSubtitle: row.recentlyApproved ? "Recently approved" : memberRoleLabel(row.userId as string),
+        periodLabel: formatPeriod(row.weekStartDate, row.weekEndDate),
+        totalHoursLabel: formatHours(resolveHours(row)),
+        statusLabel: row.uiStatus === "approved" ? "Approved" : "Pending",
+        statusMeta: row.recentlyApproved ? row.approvedAtLabel ?? "Approved just now" : "",
+        isPending: row.uiStatus === "pending",
+        isApproving: row.isApproving,
+        isRejecting: row.isRejecting,
+        rejectOpen: row.rejectOpen,
+        rejectReason: row.rejectReason,
+        isExpanded: row.isExpanded,
+        isSelected: selectedIds.value.includes(row.id),
+        recentlyApproved: row.recentlyApproved,
+        entriesLoading: row.entriesLoading,
+        entriesError: row.entriesError?.message ?? row.entriesError?.title ?? null,
+        errorMessage: row.error?.message ?? null,
+        detailEntries: (row.entries ?? []).map((entry) => ({
+            id: entry.id,
+            workDate: formatDateDisplay(entry.workDate),
+            projectName: projectName(entry.projectId),
+            activity: activityLabel(entry),
+            hoursText: formatHours((entry.durationMinutes ?? 0) / 60),
+        })),
+    }))
+)
+
+const queueSummaryLabel = computed(() => {
+    const label = pendingQueueCount.value === 1 ? "employee" : "employees"
+    return `Showing ${pendingQueueCount.value} ${label} with pending timesheets`
+})
+
+const queueSummaryHours = computed(() => formatHours(pendingHoursTotal.value))
+
+watch(
+    () => pendingRows.value.map((row) => row.id).join("|"),
+    () => {
+        const visiblePendingIds = new Set(pendingRows.value.map((row) => row.id))
+        selectedIds.value = selectedIds.value.filter((id) => visiblePendingIds.has(id))
+    }
+)
+
+watch([filterDateFrom, filterDateTo], async () => {
+    if (!org.value?.id) return
+    await loadApprovals()
+})
 
 function displayName(userId?: string) {
-    if (!userId) return "Unknown member"
+    if (!userId) return "Unknown employee"
     const member = memberMap.value.get(userId)
-    if (!member) return "Unknown member"
+    if (!member) return "Unknown employee"
     const name = [member.firstName, member.lastName].filter(Boolean).join(" ").trim()
-    return name || "Unknown member"
+    return name || "Unknown employee"
 }
 
-function formatDate(date?: string) {
-    if (!date) return "—"
-    const [y, m, d] = date.split("-")
-    if (!y || !m || !d) return date
-    return `${y}-${m}-${d}`
-}
-
-function formatMinutes(total?: number) {
-    if (!total && total !== 0) return "—"
-    const hours = Math.floor(total / 60)
-    const minutes = total % 60
-    return `${hours}h ${minutes}m`
+function memberRoleLabel(userId?: string) {
+    if (!userId) return "Team member"
+    const member = memberMap.value.get(userId)
+    if (!member) return "Team member"
+    if (member.role === 0) return "Admin"
+    if (member.role === 1) return "Manager"
+    return "Employee"
 }
 
 function projectName(projectId?: string) {
@@ -83,11 +192,32 @@ function projectName(projectId?: string) {
 }
 
 function formatDateDisplay(date?: string) {
-    if (!date) return "â€”"
-    const clean = date.includes("T") ? date.split("T")[0] ?? date : date
-    const [y, m, d] = clean.split("-")
-    if (!y || !m || !d) return date
-    return `${d}/${m}/${y}`
+    if (!date) return "—"
+    const parsed = new Date(date)
+    if (Number.isNaN(parsed.getTime())) return date
+    return parsed.toLocaleDateString(undefined, { month: "short", day: "2-digit" })
+}
+
+function formatPeriod(start?: string, end?: string) {
+    if (!start && !end) return "—"
+    return `${formatDateDisplay(start)} - ${formatDateDisplay(end ?? start)}`
+}
+
+function resolveHours(row: Timesheet) {
+    if (typeof row.totalHours === "number") return row.totalHours
+    if (typeof row.totalMinutes === "number") return row.totalMinutes / 60
+    return 0
+}
+
+function formatHours(value: number) {
+    return `${value.toFixed(1)} hrs`
+}
+
+function activityLabel(entry: TimesheetEntry) {
+    const notes = typeof entry.notes === "string" ? entry.notes.trim() : ""
+    if (notes) return notes
+    if (entry.startTime && entry.endTime) return `${entry.startTime} - ${entry.endTime}`
+    return "Timesheet entry"
 }
 
 function statusLabel(status?: number) {
@@ -95,6 +225,31 @@ function statusLabel(status?: number) {
     if (status === 2) return "Approved"
     if (status === 3) return "Rejected"
     return "Draft"
+}
+
+function normalizeApprovalRow(timesheet: Timesheet): ApprovalRow {
+    return {
+        ...timesheet,
+        uiStatus: "pending",
+        isApproving: false,
+        isRejecting: false,
+        rejectReason: "",
+        rejectOpen: false,
+        isExpanded: false,
+        entries: undefined,
+        entriesLoading: false,
+        entriesError: null,
+        error: null,
+        approvedAtLabel: null,
+        recentlyApproved: false,
+    }
+}
+
+function getDateFilterParams() {
+    return {
+        fromWeekStart: filterDateFrom.value || undefined,
+        toWeekStart: filterDateTo.value || undefined,
+    }
 }
 
 async function loadApprovals() {
@@ -106,109 +261,157 @@ async function loadApprovals() {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
+
         const firstOrg = orgs[0]
         if (!firstOrg) return
         org.value = firstOrg
-        if (!org.value?.id) return
+
         const [membersResult, projectsResult, approvalsResult, mineResult] = await Promise.all([
-            organizationsApi.getMembers(org.value.id),
-            projectsApi.list(org.value.id),
-            timesheetsApi.listPendingApproval(org.value.id),
-            timesheetsApi.listMine(org.value.id),
+            organizationsApi.getMembers(firstOrg.id),
+            projectsApi.list(firstOrg.id),
+            timesheetsApi.listPendingApproval(firstOrg.id, getDateFilterParams()),
+            timesheetsApi.listMine(firstOrg.id),
         ])
+
         members.value = membersResult
         projects.value = projectsResult
-        approvals.value = approvalsResult.map((t) => ({
-            ...t,
-            rejectReason: "",
-            isExpanded: false,
-            entries: undefined,
-            entriesLoading: false,
-            entriesError: null,
-            error: null,
-        }))
-        mySubmissions.value = mineResult.filter((t) => t.status !== undefined && t.status !== 0)
-    } catch (e) {
-        console.error("Load approvals error:", e)
-        error.value = toUiError(e)
+        approvals.value = approvalsResult.map(normalizeApprovalRow)
+        mySubmissions.value = mineResult.filter((timesheet) => timesheet.status !== undefined && timesheet.status !== 0)
+    } catch (cause) {
+        console.error("Load approvals error:", cause)
+        error.value = toUiError(cause)
     } finally {
         loading.value = false
     }
 }
 
-async function approveTimesheet(row: ApprovalRow) {
-    if (!org.value?.id) return
+async function approveTimesheet(rowId: string) {
+    const row = approvals.value.find((item) => item.id === rowId)
+    if (!row || !org.value?.id || row.uiStatus !== "pending") return
     row.error = null
     row.isApproving = true
     try {
         await timesheetsApi.approve(org.value.id, row.id)
-        approvals.value = approvals.value.filter((t) => t.id !== row.id)
-    } catch (e) {
-        console.error("Approve timesheet error:", e)
-        row.error = toUiError(e)
+        row.uiStatus = "approved"
+        row.recentlyApproved = true
+        row.approvedAtLabel = "Approved just now"
+        row.rejectOpen = false
+        selectedIds.value = selectedIds.value.filter((id) => id !== row.id)
+    } catch (cause) {
+        console.error("Approve timesheet error:", cause)
+        row.error = toUiError(cause)
     } finally {
         row.isApproving = false
     }
 }
 
-async function rejectTimesheet(row: ApprovalRow) {
-    if (!org.value?.id) return
+async function approveAllPending() {
+    const rows = pendingRows.value.filter((row) => !row.isApproving && !row.isRejecting)
+    if (!rows.length || approvingAll.value) return
+    approvingAll.value = true
+    try {
+        for (const row of rows) {
+            await approveTimesheet(row.id)
+        }
+    } finally {
+        approvingAll.value = false
+    }
+}
+
+async function rejectTimesheet(rowId: string) {
+    const row = approvals.value.find((item) => item.id === rowId)
+    if (!row || !org.value?.id) return
     row.error = null
-    if (!row.rejectReason?.trim()) {
+    if (!row.rejectReason.trim()) {
         row.error = {
             title: "Reason required",
-            message: "Please provide a reason to reject this timesheet.",
+            message: "Enter a rejection reason before rejecting this timesheet.",
         }
         return
     }
+
     row.isRejecting = true
     try {
         await timesheetsApi.reject(org.value.id, row.id, { reason: row.rejectReason.trim() })
-        approvals.value = approvals.value.filter((t) => t.id !== row.id)
-    } catch (e) {
-        console.error("Reject timesheet error:", e)
-        row.error = toUiError(e)
+        approvals.value = approvals.value.filter((item) => item.id !== row.id)
+        selectedIds.value = selectedIds.value.filter((id) => id !== row.id)
+    } catch (cause) {
+        console.error("Reject timesheet error:", cause)
+        row.error = toUiError(cause)
     } finally {
         row.isRejecting = false
     }
 }
 
-async function toggleDetails(row: ApprovalRow) {
-    if (!org.value?.id) return
+function toggleReject(rowId: string) {
+    approvals.value = approvals.value.map((row) => ({
+        ...row,
+        rejectOpen: row.id === rowId ? !row.rejectOpen : false,
+        error: row.id === rowId ? row.error : null,
+    }))
+}
+
+function updateRejectReason(payload: { rowId: string; value: string }) {
+    const row = approvals.value.find((item) => item.id === payload.rowId)
+    if (!row) return
+    row.rejectReason = payload.value
+}
+
+async function toggleDetails(rowId: string) {
+    const row = approvals.value.find((item) => item.id === rowId)
+    if (!row || !org.value?.id) return
     row.isExpanded = !row.isExpanded
-    if (!row.isExpanded) return
-    if (row.entriesLoading) return
-    if (row.entries) return
+    if (!row.isExpanded || row.entries || row.entriesLoading) return
 
     row.entriesLoading = true
     row.entriesError = null
     try {
         row.entries = await timesheetEntriesApi.list(org.value.id, row.id)
-    } catch (e) {
-        console.error("Load timesheet entries error:", e)
-        row.entriesError = toUiError(e)
+    } catch (cause) {
+        console.error("Load timesheet entries error:", cause)
+        row.entriesError = toUiError(cause)
     } finally {
         row.entriesLoading = false
     }
+}
+
+function toggleSelect(payload: { rowId: string; checked: boolean }) {
+    const row = approvals.value.find((item) => item.id === payload.rowId)
+    if (!row || row.uiStatus !== "pending") return
+    if (payload.checked) {
+        selectedIds.value = [...new Set([...selectedIds.value, row.id])]
+        return
+    }
+    selectedIds.value = selectedIds.value.filter((id) => id !== row.id)
+}
+
+function toggleSelectAll(checked: boolean) {
+    selectedIds.value = checked ? pendingRows.value.map((row) => row.id) : []
 }
 
 onMounted(loadApprovals)
 </script>
 
 <template>
-    <section class="card approvals">
-        <header class="approvals__header">
+    <section class="approvals-page">
+        <header class="approvals-page__hero card">
             <div>
-                <h1 class="approvals__title">Approvals</h1>
-                <p v-if="org" class="approvals__subtitle">{{ org.name }}</p>
+                <p class="approvals-page__breadcrumb">Approvals / Pending Queue</p>
+                <h1 class="approvals-page__title">Pending Queue</h1>
+                <p class="approvals-page__subtitle">
+                    Review submitted timesheets, inspect time breakdowns, and clear the queue without leaving the page.
+                </p>
             </div>
-            <div class="approvals__meta">
-                <span class="approvals__meta-label">
-                    {{ canReviewApprovals ? "Pending" : "My submissions" }}
-                </span>
-                <span class="approvals__meta-value">
-                    {{ canReviewApprovals ? approvals.length : mySubmissions.length }}
-                </span>
+
+            <div class="approvals-page__hero-metrics">
+                <div class="approvals-page__metric">
+                    <span>Pending employees</span>
+                    <strong>{{ pendingQueueCount }}</strong>
+                </div>
+                <div class="approvals-page__metric">
+                    <span>Pending hours</span>
+                    <strong>{{ queueSummaryHours }}</strong>
+                </div>
             </div>
         </header>
 
@@ -218,354 +421,196 @@ onMounted(loadApprovals)
         </div>
 
         <template v-else-if="loading">
-            <p class="muted">Loading approvals…</p>
+            <section class="card approvals-page__loading">
+                <p class="muted">Loading approvals queue...</p>
+            </section>
         </template>
 
-        <template v-else>
-            <div class="approvals__table-wrap">
-                <table class="approvals-table" v-if="canReviewApprovals && approvals.length">
-                    <thead>
-                        <tr>
-                            <th>Employee</th>
-                            <th>Week</th>
-                            <th>Total</th>
-                            <th>Submitted</th>
-                            <th class="approvals-table__actions">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <template v-for="row in approvals" :key="row.id">
-                        <tr>
-                            <td>
-                                <div class="approvals__employee">
-                                    <span class="approvals__employee-name">
-                                        {{ displayName(row.userId as string) }}
-                                    </span>
-                                </div>
-                            </td>
-                            <td>
-                                <div class="approvals__week">
-                                    <span>{{ formatDateDisplay(row.weekStartDate) }}</span>
-                                    <span class="approvals__week-sep">→</span>
-                                    <span>{{ formatDateDisplay(row.weekEndDate) }}</span>
-                                </div>
-                                <button
-                                    type="button"
-                                    class="link-btn approvals__details-toggle"
-                                    :disabled="row.isApproving || row.isRejecting"
-                                    @click="toggleDetails(row)"
-                                >
-                                    {{ row.isExpanded ? "Hide submitted rows" : "View submitted rows" }}
-                                </button>
-                            </td>
-                            <td>
-                                <div class="approvals__total">
-                                    <span class="approvals__total-hours">
-                                        {{ formatMinutes(row.totalMinutes as number) }}
-                                    </span>
-                                </div>
-                            </td>
-                            <td>{{ row.submittedAtUtc ? formatDateDisplay(row.submittedAtUtc) : "—" }}</td>
-                            <td class="approvals-table__actions">
-                                <div class="approvals__row-actions">
-                                    <button
-                                        type="button"
-                                        class="btn btn-primary btn-sm"
-                                        :disabled="row.isApproving || row.isRejecting"
-                                        @click="approveTimesheet(row)"
-                                    >
-                                        {{ row.isApproving ? "Approving…" : "Approve" }}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="btn btn-secondary btn-sm"
-                                        :disabled="row.isRejecting || row.isApproving"
-                                        @click="rejectTimesheet(row)"
-                                    >
-                                        {{ row.isRejecting ? "Rejecting…" : "Reject" }}
-                                    </button>
-                                </div>
-                                <div class="approvals__reject">
-                                    <input
-                                        v-model="row.rejectReason"
-                                        type="text"
-                                        class="table-input"
-                                        placeholder="Rejection reason"
-                                        :disabled="row.isApproving || row.isRejecting"
-                                    />
-                                </div>
-                                <div v-if="row.error" class="alert alert--inline">
-                                    {{ row.error.message }}
-                                </div>
-                            </td>
-                        </tr>
-                        <tr v-if="row.isExpanded" class="approvals__details-row">
-                            <td :colspan="5">
-                                <div class="approvals__details">
-                                    <div class="approvals__details-head">
-                                        <strong>Submitted rows</strong>
-                                        <span class="muted">{{ row.entries?.length ?? 0 }} row(s)</span>
-                                    </div>
+        <template v-else-if="canReviewApprovals">
+            <FilterBar
+                :employees="employeeOptions"
+                :employee-id="filterEmployeeId"
+                :status="filterStatus"
+                :date-from="filterDateFrom"
+                :date-to="filterDateTo"
+                :approve-all-disabled="!pendingRows.length || approvingAll"
+                :approve-all-busy="approvingAll"
+                @update:employee-id="filterEmployeeId = $event"
+                @update:status="filterStatus = $event"
+                @update:date-from="filterDateFrom = $event"
+                @update:date-to="filterDateTo = $event"
+                @approve-all="approveAllPending"
+            />
 
-                                    <p v-if="row.entriesLoading" class="muted">Loading rowsâ€¦</p>
-                                    <div v-else-if="row.entriesError" class="alert alert--inline">
-                                        {{ row.entriesError.message }}
-                                    </div>
-                                    <table v-else-if="row.entries?.length" class="entries-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Work date</th>
-                                                <th>Project</th>
-                                                <th>Duration</th>
-                                                <th>Start</th>
-                                                <th>End</th>
-                                                <th>Notes</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr v-for="e in row.entries" :key="e.id">
-                                                <td>{{ formatDateDisplay(e.workDate) }}</td>
-                                                <td>{{ projectName(e.projectId) }}</td>
-                                                <td>{{ formatMinutes(e.durationMinutes ?? 0) }}</td>
-                                                <td>{{ e.startTime ?? "â€”" }}</td>
-                                                <td>{{ e.endTime ?? "â€”" }}</td>
-                                                <td>{{ e.notes ?? "â€”" }}</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                    <p v-else class="muted">No rows found for this timesheet.</p>
-                                </div>
-                            </td>
-                        </tr>
-                        </template>
-                    </tbody>
-                </table>
-                <table class="approvals-table" v-else-if="!canReviewApprovals && mySubmissions.length">
-                    <thead>
-                        <tr>
-                            <th>Week</th>
-                            <th>Status</th>
-                            <th>Total</th>
-                            <th>Submitted</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr v-for="row in mySubmissions" :key="row.id">
-                            <td>
-                                <div class="approvals__week">
-                                    <span>{{ formatDateDisplay(row.weekStartDate) }}</span>
-                                    <span class="approvals__week-sep">→</span>
-                                    <span>{{ formatDateDisplay(row.weekEndDate) }}</span>
-                                </div>
-                            </td>
-                            <td>{{ statusLabel(row.status) }}</td>
-                            <td>{{ formatMinutes(row.totalMinutes) }}</td>
-                            <td>{{ row.submittedAtUtc ? formatDateDisplay(row.submittedAtUtc) : "—" }}</td>
-                        </tr>
-                    </tbody>
-                </table>
-                <p v-else class="muted">
-                    {{ canReviewApprovals ? "No pending approvals." : "No submissions yet." }}
+            <QueueTable
+                :rows="queueRows"
+                :all-pending-selected="allPendingSelected"
+                :summary-label="queueSummaryLabel"
+                :summary-hours="queueSummaryHours"
+                @toggle-select-all="toggleSelectAll"
+                @toggle-select="toggleSelect"
+                @approve="approveTimesheet"
+                @toggle-reject="toggleReject"
+                @confirm-reject="rejectTimesheet"
+                @update-reject-reason="updateRejectReason"
+                @toggle-details="toggleDetails"
+            />
+
+            <section v-if="!filteredApprovals.length" class="card approvals-page__empty">
+                <p class="approvals-page__empty-title">No queue items match the current filters.</p>
+                <p class="muted">Adjust the employee, date range, or status filter to widen the queue.</p>
+            </section>
+        </template>
+
+        <section v-else class="card approvals-page__fallback">
+            <header>
+                <p class="approvals-page__breadcrumb">Approvals / My Submissions</p>
+                <h1 class="approvals-page__title">My Submission Status</h1>
+                <p class="approvals-page__subtitle">
+                    You do not currently have approval access, so this page shows the status of your submitted timesheets.
                 </p>
-            </div>
-        </template>
+            </header>
+
+            <table v-if="mySubmissions.length" class="approvals-page__fallback-table">
+                <thead>
+                    <tr>
+                        <th>Period</th>
+                        <th>Status</th>
+                        <th>Total Hours</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="row in mySubmissions" :key="row.id">
+                        <td>{{ formatPeriod(row.weekStartDate, row.weekEndDate) }}</td>
+                        <td>{{ statusLabel(row.status) }}</td>
+                        <td>{{ formatHours(resolveHours(row)) }}</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p v-else class="muted">No submitted timesheets yet.</p>
+        </section>
     </section>
 </template>
 
 <style scoped>
-.approvals {
+.approvals-page {
+    display: grid;
+    gap: var(--s-4);
+}
+
+.approvals-page__hero {
+    padding: var(--s-5);
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: var(--s-4);
+}
+
+.approvals-page__breadcrumb {
+    margin: 0 0 var(--s-1);
+    color: var(--text-3);
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.approvals-page__title {
+    margin: 0;
+    font-size: clamp(1.45rem, 2.5vw, 2rem);
+}
+
+.approvals-page__subtitle {
+    margin: var(--s-2) 0 0;
+    color: var(--text-2);
+    max-width: 720px;
+}
+
+.approvals-page__hero-metrics {
+    display: flex;
+    gap: var(--s-3);
+    flex-wrap: wrap;
+}
+
+.approvals-page__metric {
+    min-width: 150px;
+    padding: var(--s-3) var(--s-4);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfc 100%);
+}
+
+.approvals-page__metric span {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-3);
+    font-weight: 700;
+}
+
+.approvals-page__metric strong {
+    font-size: 1.25rem;
+}
+
+.approvals-page__loading,
+.approvals-page__empty,
+.approvals-page__fallback {
     padding: var(--s-5);
 }
 
-.approvals__header {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: flex-end;
-    gap: var(--s-4);
-    margin-bottom: var(--s-4);
-}
-
-.approvals__title {
-    margin: 0 0 var(--s-1) 0;
-    font-size: 1.5rem;
-}
-
-.approvals__subtitle {
-    margin: 0;
-    color: var(--text-2);
-    font-size: 0.95rem;
-}
-
-.approvals__meta {
-    text-align: right;
-}
-
-.approvals__meta-label {
-    font-size: 0.75rem;
+.approvals-page__empty-title {
+    margin: 0 0 var(--s-1);
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
 }
 
-.approvals__meta-value {
-    display: block;
-    font-weight: 600;
-    font-size: 1.1rem;
-}
-
-.approvals__table-wrap {
-    overflow-x: auto;
-}
-
-.approvals-table {
+.approvals-page__fallback-table {
     width: 100%;
     border-collapse: collapse;
+    margin-top: var(--s-4);
 }
 
-.approvals-table th,
-.approvals-table td {
+.approvals-page__fallback-table th,
+.approvals-page__fallback-table td {
     padding: var(--s-3) var(--s-4);
     text-align: left;
     border-bottom: 1px solid var(--border);
-    vertical-align: top;
 }
 
-.approvals-table tbody tr:not(.approvals__details-row):hover td {
-    background: var(--surface-2);
-}
-
-.approvals-table th {
+.approvals-page__fallback-table th {
+    color: var(--text-3);
     font-size: 0.75rem;
-    font-weight: 700;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
 }
 
-.approvals-table__actions {
-    width: 280px;
+.alert {
+    border: 1px solid #f1c3c3;
+    border-radius: var(--r-md);
+    background: #fff7f7;
+    color: #8a1f1f;
+    padding: var(--s-3) var(--s-4);
 }
 
-.approvals__employee {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.approvals__employee-name {
-    font-weight: 600;
-}
-
-.approvals__week {
-    display: flex;
-    align-items: center;
-    gap: var(--s-1);
-    font-weight: 600;
-}
-
-.approvals__week-sep {
-    color: var(--text-3);
-}
-
-.approvals__total-hours {
-    font-weight: 600;
-}
-
-.link-btn {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    color: var(--primary);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    text-decoration: underline;
-    text-underline-offset: 3px;
-}
-
-.link-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    text-decoration: none;
-}
-
-.link-btn:not(:disabled):hover {
-    filter: brightness(0.95);
-}
-
-.approvals__details-toggle {
-    margin-top: var(--s-1);
-    padding: 0;
-    font-size: 0.875rem;
-}
-
-.approvals__details-row td {
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border);
-}
-
-.approvals__details {
-    padding: var(--s-3);
-    display: grid;
-    gap: var(--s-2);
-}
-
-.approvals__details-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: var(--s-2);
-}
-
-.entries-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    overflow: hidden;
-}
-
-.entries-table th,
-.entries-table td {
-    padding: var(--s-2) var(--s-3);
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-}
-
-.entries-table th {
-    font-size: 0.75rem;
+.alert__title {
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
 }
 
-.entries-table tr:last-child td {
-    border-bottom: 0;
-}
-
-.approvals__row-actions {
-    display: flex;
-    gap: var(--s-2);
-    flex-wrap: wrap;
-}
-
-.approvals__reject {
-    margin-top: var(--s-2);
-}
-
-.alert--inline {
-    margin-top: var(--s-2);
-    padding: var(--s-2);
-    font-size: 0.875rem;
+.alert__msg {
+    margin-top: 4px;
 }
 
 .muted {
     margin: 0;
     color: var(--text-2);
+}
+
+@media (max-width: 960px) {
+    .approvals-page__hero {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: var(--s-4);
+    }
 }
 </style>
