@@ -1,10 +1,13 @@
 <script setup lang="ts">
 defineProps<{
-    totalCount: number
-    activeCount: number
-    archivedCount: number
+    breadcrumb?: string
+    title?: string
+    subtitle?: string
+    metrics?: Array<{ label: string; value: string | number }>
     canCreate: boolean
     createOpen: boolean
+    createLabel?: string
+    closeLabel?: string
 }>()
 
 defineEmits<{
@@ -15,26 +18,21 @@ defineEmits<{
 <template>
     <header class="projects-hero card">
         <div class="projects-hero__copy">
-            <p class="projects-hero__breadcrumb">Management / Projects</p>
-            <h1 class="projects-hero__title">Active Projects</h1>
+            <p class="projects-hero__breadcrumb">{{ breadcrumb ?? "Management / Projects" }}</p>
+            <h1 class="projects-hero__title">{{ title ?? "Active Projects" }}</h1>
             <p class="projects-hero__subtitle">
-                Create projects, keep ownership clear, and manage team assignments without leaving the workspace.
+                {{
+                    subtitle ??
+                    "Create projects, keep ownership clear, and manage team assignments without leaving the workspace."
+                }}
             </p>
         </div>
 
         <div class="projects-hero__aside">
             <div class="projects-hero__metrics">
-                <div class="projects-hero__metric">
-                    <span>Total projects</span>
-                    <strong>{{ totalCount }}</strong>
-                </div>
-                <div class="projects-hero__metric">
-                    <span>Active</span>
-                    <strong>{{ activeCount }}</strong>
-                </div>
-                <div class="projects-hero__metric">
-                    <span>Archived</span>
-                    <strong>{{ archivedCount }}</strong>
+                <div v-for="metric in metrics ?? []" :key="metric.label" class="projects-hero__metric">
+                    <span>{{ metric.label }}</span>
+                    <strong>{{ metric.value }}</strong>
                 </div>
             </div>
 
@@ -45,7 +43,7 @@ defineEmits<{
                 :aria-expanded="createOpen"
                 @click="$emit('toggle-create')"
             >
-                {{ createOpen ? "Close project form" : "Create New Project" }}
+                {{ createOpen ? closeLabel ?? "Close project form" : createLabel ?? "Create New Project" }}
             </button>
         </div>
     </header>

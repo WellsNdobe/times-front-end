@@ -125,6 +125,11 @@ const filteredProjects = computed(() => {
 const totalProjects = computed(() => projects.value.length)
 const activeProjects = computed(() => projects.value.filter((project) => project.isActive !== false).length)
 const archivedProjects = computed(() => projects.value.filter((project) => project.isActive === false).length)
+const heroMetrics = computed(() => [
+    { label: "Total projects", value: totalProjects.value },
+    { label: "Active", value: activeProjects.value },
+    { label: "Archived", value: archivedProjects.value },
+])
 
 const assignedUserIds = computed(() => new Set(assignments.value.map((assignment) => assignment.userId)))
 const assignCandidates = computed(() =>
@@ -453,11 +458,14 @@ onMounted(loadInitial)
 <template>
     <section class="projects-page">
         <ProjectsHero
-            :total-count="totalProjects"
-            :active-count="activeProjects"
-            :archived-count="archivedProjects"
+            breadcrumb="Management / Projects"
+            title="Active Projects"
+            subtitle="Create projects, keep ownership clear, and manage team assignments without leaving the workspace."
+            :metrics="heroMetrics"
             :can-create="isManagerOrAdmin"
             :create-open="showAddForm"
+            create-label="Create New Project"
+            close-label="Close project form"
             @toggle-create="showAddForm = !showAddForm"
         />
 
