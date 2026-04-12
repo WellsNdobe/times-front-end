@@ -309,7 +309,7 @@ function setProjectApproverIds(projectId: string, userIds: string[]) {
 
 function projectApproverNames(project: Project) {
     const userIds = project.approverUserIds ?? []
-    if (!userIds.length) return "No approvers assigned"
+    if (!userIds.length) return "None"
     return userIds.map((userId) => memberDisplayNameByUserId(userId)).join(", ")
 }
 
@@ -498,7 +498,7 @@ onMounted(loadInitial)
 
             <section v-if="!filteredProjects.length" class="card projects-page__empty">
                 <p class="projects-page__empty-title">No projects match the current filters.</p>
-                <p class="muted">Adjust your search, client, or status filters to widen the list.</p>
+                <p class="muted">Adjust your search parameters.</p>
             </section>
 
             <section v-else class="card projects-table-card">
