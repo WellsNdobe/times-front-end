@@ -4,6 +4,8 @@ import { apiClient } from "~/api/apiClient"
 export type Project = {
     id: string
     name: string
+    code?: string | null
+    description?: string | null
     clientId?: string
     clientName?: string
     isActive?: boolean
