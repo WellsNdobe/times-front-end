@@ -10,8 +10,11 @@ import { timesheetsApi, type Timesheet } from "~/api/timesheetsApi"
 import { timesheetEntriesApi, type TimesheetEntry } from "~/api/timesheetEntriesApi"
 import { toUiError, type UiError } from "~/utils/errorMessages"
 
-const org = ref<Organization | null>(null)
+type TrackerViewState = "idle" | "running" | "stopped_unsaved"
+
 const route = useRoute()
+
+const org = ref<Organization | null>(null)
 const projects = ref<Project[]>([])
 const timesheet = ref<Timesheet | null>(null)
 const entries = ref<TimesheetEntry[]>([])
@@ -22,15 +25,18 @@ const deletingId = ref<string | null>(null)
 const error = ref<UiError | null>(null)
 const localError = ref<UiError | null>(null)
 
-const workDate = ref(formatDateForInput(new Date()))
+const todayKey = ref(formatDateForInput(new Date()))
 const selectedProjectId = ref("")
 const notes = ref("")
-const manualMinutes = ref<number | null>(null)
 
 const running = ref(false)
 const sessionStartedAt = ref<Date | null>(null)
 const activeSessionId = ref<string | null>(null)
+const activeSessionWorkDate = ref(todayKey.value)
 const now = ref(Date.now())
+const pendingStoppedEntry = ref<TimesheetEntry | null>(null)
+const stoppedElapsedSeconds = ref(0)
+
 let ticker: ReturnType<typeof setInterval> | null = null
 let notesSyncTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -40,33 +46,56 @@ const activeProjects = computed(() =>
         .filter((project) => project.isActive !== false)
         .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
 )
+const hasProjects = computed(() => activeProjects.value.length > 0)
 const todayEntries = computed(() =>
     entries.value
-        .filter((entry) => entry.workDate === workDate.value)
+        .filter((entry) => entry.workDate === todayKey.value)
         .sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""))
 )
 const todayTotalMinutes = computed(() =>
     todayEntries.value.reduce((total, entry) => total + (entry.durationMinutes ?? 0), 0)
 )
-const selectedDateLabel = computed(() => formatDateLong(workDate.value))
-const hasProjects = computed(() => activeProjects.value.length > 0)
-const elapsedSeconds = computed(() => {
-    if (!running.value || !sessionStartedAt.value) return 0
-    return Math.max(0, Math.floor((now.value - sessionStartedAt.value.getTime()) / 1000))
-})
-const elapsedDisplay = computed(() => formatSecondsAsClock(elapsedSeconds.value))
-const canTrack = computed(() => !!selectedProjectId.value && !!timesheet.value?.id)
-const timesheetStatusLabel = computed(() => {
-    const status = timesheet.value?.status
-    if (status === 1) return "Submitted"
-    if (status === 2) return "Approved"
-    if (status === 3) return "Rejected"
-    return "Draft"
+const trackerState = computed<TrackerViewState>(() => {
+    if (running.value) return "running"
+    if (pendingStoppedEntry.value) return "stopped_unsaved"
+    return "idle"
 })
 const isTimesheetEditable = computed(() => {
     const status = timesheet.value?.status
     return status === undefined || status === 0 || status === 3
 })
+const elapsedSeconds = computed(() => {
+    if (!running.value || !sessionStartedAt.value) return 0
+    return Math.max(0, Math.floor((now.value - sessionStartedAt.value.getTime()) / 1000))
+})
+const timerDisplay = computed(() => {
+    if (trackerState.value === "running") return formatSecondsAsClock(elapsedSeconds.value)
+    if (trackerState.value === "stopped_unsaved") return formatSecondsAsClock(stoppedElapsedSeconds.value)
+    return "00:00:00"
+})
+const headerDateLabel = computed(() => `Today · ${formatDateLong(todayKey.value)}`)
+const trackingContextLabel = computed(() =>
+    activeSessionWorkDate.value === todayKey.value
+        ? "Tracking for today"
+        : `Tracking for ${formatDateLong(activeSessionWorkDate.value)}`
+)
+const todaySummaryLabel = computed(() => {
+    const count = todayEntries.value.length
+    const entryLabel = `${count} ${count === 1 ? "entry" : "entries"} today`
+    return `${entryLabel} · ${formatMinutes(todayTotalMinutes.value)} tracked`
+})
+const canStartTimer = computed(
+    () =>
+        trackerState.value === "idle" &&
+        !!selectedProjectId.value &&
+        !!timesheet.value?.id &&
+        hasProjects.value &&
+        isTimesheetEditable.value
+)
+const isProjectLocked = computed(
+    () => trackerState.value !== "idle" || saving.value || !isTimesheetEditable.value
+)
+const isNotesDisabled = computed(() => saving.value || !isTimesheetEditable.value)
 
 onMounted(() => loadTrackerData())
 onBeforeUnmount(() => {
@@ -74,16 +103,10 @@ onBeforeUnmount(() => {
     clearNotesSyncTimer()
 })
 
-watch(workDate, async (value, previous) => {
-    if (!value || value === previous) return
-    await ensureTimesheetForSelectedWeek()
-})
-
 watch(
-    () => [route.query.date, route.query.projectId],
-    async () => {
+    () => route.query.projectId,
+    () => {
         applyQueryPrefill()
-        await ensureTimesheetForSelectedWeek()
     }
 )
 
@@ -95,16 +118,18 @@ watch(notes, () => {
 async function loadTrackerData() {
     loading.value = true
     error.value = null
+
     try {
         const orgs = await organizationsApi.getMine()
         if (!orgs?.length) {
             error.value = { title: "No organization", message: "Create an organization first." }
             return
         }
+
         const firstOrg = orgs[0]
-        if (!firstOrg) return
+        if (!firstOrg?.id) return
+
         org.value = firstOrg
-        if (!org.value?.id) return
 
         const activeSession = await getActiveSession(firstOrg.id)
         if (activeSession) {
@@ -112,19 +137,17 @@ async function loadTrackerData() {
         }
 
         const [projectsResult, timesheetResult] = await Promise.all([
-            projectsApi.list(org.value.id, { isActive: true }),
-            loadTimesheetForWeek(org.value.id, getWeekStartDateString(workDate.value)),
+            projectsApi.list(firstOrg.id, { isActive: true }),
+            loadTimesheetForWeek(firstOrg.id, getWeekStartDateString(todayKey.value)),
         ])
+
         projects.value = projectsResult
         timesheet.value = timesheetResult
         entries.value = timesheetResult
-            ? await timesheetEntriesApi.list(org.value.id, timesheetResult.id)
+            ? await timesheetEntriesApi.list(firstOrg.id, timesheetResult.id)
             : []
 
         applyQueryPrefill()
-        if (!selectedProjectId.value && activeProjects.value.length) {
-            selectedProjectId.value = activeProjects.value[0].id
-        }
     } catch (e) {
         console.error("Load tracker error:", e)
         error.value = toUiError(e)
@@ -134,12 +157,7 @@ async function loadTrackerData() {
 }
 
 function applyQueryPrefill() {
-    if (running.value) return
-    const rawDate = route.query.date
-    const queryDate = typeof rawDate === "string" ? rawDate : ""
-    if (/^\d{4}-\d{2}-\d{2}$/.test(queryDate)) {
-        workDate.value = queryDate
-    }
+    if (trackerState.value !== "idle") return
 
     const rawProjectId = route.query.projectId
     const queryProjectId = typeof rawProjectId === "string" ? rawProjectId : ""
@@ -162,29 +180,13 @@ async function refreshEntries() {
     entries.value = await timesheetEntriesApi.list(organizationId.value, timesheet.value.id)
 }
 
-async function ensureTimesheetForSelectedWeek() {
-    if (!organizationId.value) return
-    try {
-        const nextTimesheet = await loadTimesheetForWeek(
-            organizationId.value,
-            getWeekStartDateString(workDate.value)
-        )
-        if (!timesheet.value || nextTimesheet.id !== timesheet.value.id) {
-            timesheet.value = nextTimesheet
-            await refreshEntries()
-        }
-    } catch (e) {
-        console.error("Load week timesheet error:", e)
-        localError.value = toUiError(e)
-    }
-}
-
 function startTimer() {
     void startTimerSession()
 }
 
 async function startTimerSession() {
     localError.value = null
+
     if (!isTimesheetEditable.value) {
         localError.value = {
             title: "Timesheet locked",
@@ -192,14 +194,15 @@ async function startTimerSession() {
         }
         return
     }
-    if (!canTrack.value) {
+
+    if (!canStartTimer.value) {
         localError.value = {
             title: "Select a project",
             message: "Pick a project before starting the timer.",
         }
         return
     }
-    if (running.value) return
+
     if (!organizationId.value || !timesheet.value?.id) return
 
     saving.value = true
@@ -207,7 +210,7 @@ async function startTimerSession() {
         const session = await trackerApi.start(organizationId.value, {
             timesheetId: timesheet.value.id,
             projectId: selectedProjectId.value,
-            workDate: workDate.value,
+            workDate: todayKey.value,
             notes: notes.value.trim() || null,
             utcOffsetMinutes: -new Date().getTimezoneOffset(),
         })
@@ -219,68 +222,73 @@ async function startTimerSession() {
     }
 }
 
-async function stopAndSave() {
-    if (!running.value || !organizationId.value) return
-    localError.value = null
+function stopTimer() {
+    void stopTimerSession()
+}
 
+async function stopTimerSession() {
+    if (!running.value || !organizationId.value) return
+
+    localError.value = null
     saving.value = true
+
     try {
         const createdEntry = await trackerApi.stop(organizationId.value, {
             notes: notes.value.trim() || null,
         })
-        mergeCreatedEntry(createdEntry)
+
+        stoppedElapsedSeconds.value = elapsedSeconds.value
+        pendingStoppedEntry.value = createdEntry
         clearActiveSession()
-        await refreshEntries()
-        notes.value = ""
-        manualMinutes.value = null
     } catch (e) {
-        console.error("Stop and save error:", e)
+        console.error("Stop timer error:", e)
         localError.value = toUiError(e)
     } finally {
         saving.value = false
     }
 }
 
-async function addManualEntry() {
-    localError.value = null
-    if (!isTimesheetEditable.value) {
-        localError.value = {
-            title: "Timesheet locked",
-            message: "This week's timesheet cannot be edited in its current state.",
-        }
-        return
-    }
-    if (!organizationId.value || !timesheet.value?.id) return
-    if (!selectedProjectId.value) {
-        localError.value = {
-            title: "Select a project",
-            message: "Pick a project before adding time.",
-        }
-        return
-    }
-    if (!manualMinutes.value || manualMinutes.value <= 0) {
-        localError.value = {
-            title: "Invalid duration",
-            message: "Enter a duration greater than zero minutes.",
-        }
-        return
-    }
+function saveEntry() {
+    void saveStoppedEntry()
+}
 
+async function saveStoppedEntry() {
+    if (!pendingStoppedEntry.value) return
+
+    localError.value = null
     saving.value = true
+
     try {
-        await timesheetEntriesApi.create(organizationId.value, timesheet.value.id, {
-            projectId: selectedProjectId.value,
-            workDate: workDate.value,
-            durationMinutes: Number(manualMinutes.value),
-            notes: notes.value.trim() || null,
-            startTime: null,
-            endTime: null,
-        })
+        mergeCreatedEntry(pendingStoppedEntry.value)
         await refreshEntries()
-        notes.value = ""
-        manualMinutes.value = null
+        resetComposer()
     } catch (e) {
-        console.error("Manual entry error:", e)
+        console.error("Save entry error:", e)
+        localError.value = toUiError(e)
+    } finally {
+        saving.value = false
+    }
+}
+
+function discardEntry() {
+    void discardStoppedEntry()
+}
+
+async function discardStoppedEntry() {
+    if (!pendingStoppedEntry.value || !organizationId.value) return
+
+    localError.value = null
+    saving.value = true
+
+    try {
+        const timesheetId = pendingStoppedEntry.value.timesheetId ?? timesheet.value?.id
+        if (!timesheetId) return
+
+        await timesheetEntriesApi.remove(organizationId.value, timesheetId, pendingStoppedEntry.value.id)
+        await refreshEntries()
+        resetComposer()
+    } catch (e) {
+        console.error("Discard entry error:", e)
         localError.value = toUiError(e)
     } finally {
         saving.value = false
@@ -288,11 +296,24 @@ async function addManualEntry() {
 }
 
 async function deleteEntry(entry: TimesheetEntry) {
-    if (!organizationId.value || !timesheet.value?.id) return
+    if (!organizationId.value) return
+
+    if (!isTimesheetEditable.value) {
+        localError.value = {
+            title: "Timesheet locked",
+            message: "This week's timesheet cannot be edited in its current state.",
+        }
+        return
+    }
+
+    const timesheetId = entry.timesheetId ?? timesheet.value?.id
+    if (!timesheetId) return
+
     deletingId.value = entry.id
     localError.value = null
+
     try {
-        await timesheetEntriesApi.remove(organizationId.value, timesheet.value.id, entry.id)
+        await timesheetEntriesApi.remove(organizationId.value, timesheetId, entry.id)
         await refreshEntries()
     } catch (e) {
         console.error("Delete entry error:", e)
@@ -302,13 +323,7 @@ async function deleteEntry(entry: TimesheetEntry) {
     }
 }
 
-function projectNameById(projectId: string) {
-    return projects.value.find((project) => project.id === projectId)?.name ?? "Unknown project"
-}
-
 function mergeCreatedEntry(entry: TimesheetEntry) {
-    if (timesheet.value?.id !== entry.timesheetId) return
-
     const next = entries.value
         .filter((existing) => existing.id !== entry.id)
         .concat(entry)
@@ -318,6 +333,35 @@ function mergeCreatedEntry(entry: TimesheetEntry) {
         })
 
     entries.value = next
+}
+
+function applyActiveSession(session: ActiveTimerSession) {
+    activeSessionId.value = session.id
+    activeSessionWorkDate.value = session.workDate || todayKey.value
+    selectedProjectId.value = session.projectId
+    notes.value = session.notes ?? ""
+    pendingStoppedEntry.value = null
+    stoppedElapsedSeconds.value = 0
+    running.value = true
+    sessionStartedAt.value = parseUtcDateTime(session.startedAtUtc)
+    now.value = Date.now()
+    startTicker()
+}
+
+function clearActiveSession() {
+    activeSessionId.value = null
+    running.value = false
+    sessionStartedAt.value = null
+    stopTicker()
+    clearNotesSyncTimer()
+}
+
+function resetComposer() {
+    pendingStoppedEntry.value = null
+    stoppedElapsedSeconds.value = 0
+    notes.value = ""
+    activeSessionWorkDate.value = todayKey.value
+    clearActiveSession()
 }
 
 function startTicker() {
@@ -342,25 +386,6 @@ async function getActiveSession(orgId: string) {
     }
 }
 
-function applyActiveSession(session: ActiveTimerSession) {
-    activeSessionId.value = session.id
-    selectedProjectId.value = session.projectId
-    workDate.value = session.workDate
-    notes.value = session.notes ?? ""
-    running.value = true
-    sessionStartedAt.value = parseUtcDateTime(session.startedAtUtc)
-    now.value = Date.now()
-    startTicker()
-}
-
-function clearActiveSession() {
-    activeSessionId.value = null
-    running.value = false
-    sessionStartedAt.value = null
-    stopTicker()
-    clearNotesSyncTimer()
-}
-
 function queueSessionNotesSync() {
     clearNotesSyncTimer()
     notesSyncTimer = setTimeout(() => {
@@ -377,6 +402,7 @@ function clearNotesSyncTimer() {
 async function syncSessionNotes() {
     clearNotesSyncTimer()
     if (!running.value || !organizationId.value || !activeSessionId.value) return
+
     try {
         await trackerApi.update(organizationId.value, {
             notes: notes.value.trim() || null,
@@ -386,8 +412,12 @@ async function syncSessionNotes() {
     }
 }
 
+function projectNameById(projectId: string) {
+    return projects.value.find((project) => project.id === projectId)?.name ?? "Unknown project"
+}
+
 function getWeekStartDateString(dateInput: string) {
-    const current = new Date(dateInput)
+    const current = new Date(`${dateInput}T00:00:00`)
     const day = current.getDay()
     const diff = (day + 6) % 7
     current.setDate(current.getDate() - diff)
@@ -406,13 +436,14 @@ function formatSecondsAsClock(totalSeconds: number) {
     const hours = Math.floor(totalSeconds / 3600)
     const minutes = Math.floor((totalSeconds % 3600) / 60)
     const seconds = totalSeconds % 60
-    return [hours, minutes, seconds].map((v) => String(v).padStart(2, "0")).join(":")
+    return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":")
 }
 
 function formatMinutes(total: number) {
     const hours = Math.floor(total / 60)
     const minutes = total % 60
     if (!hours) return `${minutes}m`
+    if (!minutes) return `${hours}h`
     return `${hours}h ${minutes}m`
 }
 
@@ -428,6 +459,27 @@ function formatDateLong(value: string) {
     })
 }
 
+function formatTimeValue(value?: string | null) {
+    if (!value) return ""
+
+    const normalized = value.length === 5 ? `${value}:00` : value
+    const date = new Date(`${todayKey.value}T${normalized}`)
+    if (Number.isNaN(date.getTime())) return value.slice(0, 5)
+
+    return date.toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+    })
+}
+
+function formatTimeRange(entry: TimesheetEntry) {
+    const start = formatTimeValue(entry.startTime)
+    const end = formatTimeValue(entry.endTime)
+    if (start && end) return `${start} - ${end}`
+    if (start) return start
+    return "Time range unavailable"
+}
+
 function parseUtcDateTime(value: string) {
     const normalized = /z$|[+-]\d{2}:\d{2}$/i.test(value) ? value : `${value}Z`
     return new Date(normalized)
@@ -435,13 +487,14 @@ function parseUtcDateTime(value: string) {
 </script>
 
 <template>
-    <section class="card track">
-        <header class="track__header">
+    <section class="track-page">
+        <header class="track-page__header">
             <div>
-                <h1 class="track__title">Track time</h1>
-                <p v-if="org" class="track__subtitle">{{ org.name }}</p>
+                <p v-if="org" class="track-page__workspace">{{ org.name }}</p>
+                <h1 class="track-page__title">Track time</h1>
+                <p class="track-page__date">{{ headerDateLabel }}</p>
             </div>
-            <p class="track__date">{{ selectedDateLabel }}</p>
+            <p v-if="!loading && !error" class="track-page__summary">{{ todaySummaryLabel }}</p>
         </header>
 
         <div v-if="error" class="alert" role="alert">
@@ -450,105 +503,90 @@ function parseUtcDateTime(value: string) {
         </div>
 
         <template v-else-if="loading">
-            <p class="muted">Loading tracker...</p>
+            <section class="card track-card track-card--loading">
+                <p class="muted">Loading tracker...</p>
+            </section>
         </template>
 
         <template v-else>
-            <div class="track__chips">
-                <span class="track-chip">Status: {{ timesheetStatusLabel }}</span>
-                <span class="track-chip">{{ formatMinutes(todayTotalMinutes) }} today</span>
-                <span class="track-chip">{{ todayEntries.length }} entries</span>
+            <div v-if="!isTimesheetEditable" class="track-page__notice" role="status">
+                This week's timesheet is locked. You can review entries, but you cannot start a new timer.
             </div>
 
-            <div v-if="!isTimesheetEditable" class="track__notice" role="status">
-                Timesheet is {{ timesheetStatusLabel.toLowerCase() }}. Editing is disabled.
-            </div>
+            <section class="card track-card" :class="`track-card--${trackerState}`">
+                <div class="track-card__topline">
+                    <p class="track-card__context">{{ trackingContextLabel }}</p>
+                    <div class="track-card__state" :class="`track-card__state--${trackerState}`">
+                        <span class="track-card__state-dot" />
+                        <span v-if="trackerState === 'running'">Tracking...</span>
+                        <span v-else-if="trackerState === 'stopped_unsaved'">Ready to save</span>
+                        <span v-else>Ready to track</span>
+                    </div>
+                </div>
 
-            <section class="track__composer">
-                <p class="track__timer">{{ elapsedDisplay }}</p>
+                <p class="track-card__timer">{{ timerDisplay }}</p>
 
-                <div class="track__grid">
-                    <label class="track__field">
-                        <span>Project</span>
-                        <select v-model="selectedProjectId" :disabled="running || !isTimesheetEditable">
+                <div class="track-card__fields">
+                    <label class="track-field">
+                        <span>Select project</span>
+                        <select v-model="selectedProjectId" :disabled="isProjectLocked">
                             <option value="">Select project</option>
-                            <option
-                                v-for="project in activeProjects"
-                                :key="project.id"
-                                :value="project.id"
-                            >
+                            <option v-for="project in activeProjects" :key="project.id" :value="project.id">
                                 {{ project.name }}
                             </option>
                         </select>
                     </label>
 
-                    <label class="track__field">
-                        <span>Date</span>
-                        <input v-model="workDate" type="date" :disabled="running" />
-                    </label>
-
-                    <label class="track__field">
-                        <span>Minutes</span>
-                        <input
-                            v-model.number="manualMinutes"
-                            type="number"
-                            min="1"
-                            step="1"
-                            placeholder="60"
-                            :disabled="running || !isTimesheetEditable"
-                        />
-                    </label>
-
-                    <label class="track__field track__field--full">
+                    <label class="track-field track-field--notes">
                         <span>Notes</span>
-                        <input
+                        <textarea
                             v-model.trim="notes"
-                            type="text"
-                            placeholder="Optional"
-                            :disabled="!isTimesheetEditable"
+                            rows="3"
+                            placeholder="What are you working on?"
+                            :disabled="isNotesDisabled"
                         />
                     </label>
                 </div>
 
-                <div class="track__actions">
+                <div class="track-card__actions">
                     <button
+                        v-if="trackerState === 'idle'"
                         type="button"
-                        class="btn btn-primary"
-                        :disabled="
-                            running ||
-                            saving ||
-                            !isTimesheetEditable ||
-                            !selectedProjectId ||
-                            !hasProjects
-                        "
+                        class="btn btn-primary track-card__primary"
+                        :disabled="!canStartTimer || saving"
                         @click="startTimer"
                     >
-                        Start timer
+                        {{ saving ? "Starting..." : "Start timer" }}
                     </button>
+
                     <button
+                        v-else-if="trackerState === 'running'"
                         type="button"
-                        class="btn btn-secondary"
-                        :disabled="!running || saving || !isTimesheetEditable"
-                        @click="stopAndSave"
+                        class="btn btn-primary track-card__primary"
+                        :disabled="saving"
+                        @click="stopTimer"
                     >
-                        {{ saving ? "Saving..." : "Stop and save" }}
+                        {{ saving ? "Stopping..." : "Stop timer" }}
                     </button>
-                    <button
-                        type="button"
-                        class="btn btn-secondary"
-                        :disabled="
-                            running ||
-                            saving ||
-                            !isTimesheetEditable ||
-                            !hasProjects ||
-                            !selectedProjectId ||
-                            !manualMinutes ||
-                            manualMinutes <= 0
-                        "
-                        @click="addManualEntry"
-                    >
-                        Add minutes
-                    </button>
+
+                    <template v-else>
+                        <button
+                            type="button"
+                            class="btn btn-primary track-card__primary"
+                            :disabled="saving"
+                            @click="saveEntry"
+                        >
+                            {{ saving ? "Saving..." : "Save entry" }}
+                        </button>
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            :disabled="saving"
+                            @click="discardEntry"
+                        >
+                            Discard
+                        </button>
+                    </template>
                 </div>
 
                 <p v-if="!hasProjects" class="muted">No active projects available.</p>
@@ -559,17 +597,20 @@ function parseUtcDateTime(value: string) {
                 <div class="alert__msg">{{ localError.message }}</div>
             </div>
 
-            <section class="track__entries">
-                <div class="track__entries-head">
-                    <h2 class="track__entries-title">Log</h2>
-                    <p class="track__entries-total">{{ formatMinutes(todayTotalMinutes) }} today</p>
+            <section class="card track-log">
+                <div class="track-log__header">
+                    <div>
+                        <h2 class="track-log__title">Today's entries</h2>
+                        <p class="track-log__subtitle">Saved entries only</p>
+                    </div>
+                    <p class="track-log__total">{{ formatMinutes(todayTotalMinutes) }} tracked</p>
                 </div>
 
                 <table v-if="todayEntries.length" class="track-table">
                     <thead>
                         <tr>
                             <th>Project</th>
-                            <th>Time</th>
+                            <th>Start-End</th>
                             <th>Duration</th>
                             <th>Notes</th>
                             <th class="track-table__actions">Actions</th>
@@ -578,15 +619,9 @@ function parseUtcDateTime(value: string) {
                     <tbody>
                         <tr v-for="entry in todayEntries" :key="entry.id">
                             <td data-label="Project">{{ projectNameById(entry.projectId) }}</td>
-                            <td data-label="Time">
-                                {{
-                                    entry.startTime && entry.endTime
-                                        ? `${entry.startTime} - ${entry.endTime}`
-                                        : "Manual"
-                                }}
-                            </td>
+                            <td data-label="Start-End">{{ formatTimeRange(entry) }}</td>
                             <td data-label="Duration">{{ formatMinutes(entry.durationMinutes ?? 0) }}</td>
-                            <td data-label="Notes">{{ entry.notes || "N/A" }}</td>
+                            <td data-label="Notes">{{ entry.notes || "No notes" }}</td>
                             <td class="track-table__actions" data-label="Actions">
                                 <button
                                     type="button"
@@ -600,138 +635,238 @@ function parseUtcDateTime(value: string) {
                         </tr>
                     </tbody>
                 </table>
-                <p v-else class="muted">No entries for this day yet.</p>
+
+                <p v-else class="muted">No saved entries for today yet.</p>
             </section>
         </template>
     </section>
 </template>
 
 <style scoped>
-.track {
-    padding: var(--s-5);
+.track-page {
+    display: grid;
+    gap: var(--s-5);
 }
 
-.track__header {
+.track-page__header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: end;
     gap: var(--s-4);
-    margin-bottom: var(--s-3);
 }
 
-.track__title {
-    margin: 0 0 var(--s-1) 0;
-    font-size: 1.5rem;
+.track-page__workspace {
+    margin: 0 0 var(--s-2);
+    color: var(--primary);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
-.track__subtitle {
+.track-page__title {
     margin: 0;
-    color: var(--text-2);
-}
-
-.track__date {
-    margin: 0;
-    color: var(--text-2);
-    font-size: 0.875rem;
-    font-weight: 600;
-}
-
-.track__chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    margin-bottom: var(--s-3);
-}
-
-.track-chip {
-    display: inline-flex;
-    align-items: center;
-    min-height: 30px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0 var(--s-2);
-    background: var(--surface-2);
-    font-size: 0.875rem;
-}
-
-.track__timer {
-    margin: 0 0 var(--s-3) 0;
-    font-size: 2.25rem;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
+    font-size: clamp(2rem, 4vw, 2.75rem);
     line-height: 1;
 }
 
-.track__notice {
-    margin-bottom: var(--s-3);
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: var(--surface-2);
-    padding: var(--s-2) var(--s-3);
+.track-page__date {
+    margin: var(--s-2) 0 0;
     color: var(--text-2);
-    font-size: 0.875rem;
-}
-
-.track__composer {
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: linear-gradient(165deg, var(--surface-2) 0%, var(--surface) 100%);
-    padding: var(--s-3);
-    margin-bottom: var(--s-3);
-}
-
-.track__grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(160px, 1fr));
-    gap: var(--s-3);
-    margin-bottom: var(--s-3);
-}
-
-.track__field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-}
-
-.track__field span {
-    font-size: 0.8125rem;
-    color: var(--text-2);
+    font-size: 1rem;
     font-weight: 600;
 }
 
-.track__field--full {
-    grid-column: 1 / -1;
+.track-page__summary {
+    margin: 0;
+    color: var(--text-2);
+    font-weight: 600;
+    white-space: nowrap;
 }
 
-.track__actions {
-    display: flex;
-    gap: var(--s-2);
-    flex-wrap: wrap;
-    margin-bottom: var(--s-2);
-}
-
-.track__entries {
-    border: 1px solid var(--border);
+.track-page__notice {
+    border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
     border-radius: var(--r-md);
-    padding: var(--s-3);
+    background: linear-gradient(135deg, var(--warning-soft), var(--surface));
+    padding: var(--s-3) var(--s-4);
+    color: #8a4b08;
+    font-size: 0.9375rem;
 }
 
-.track__entries-head {
+.track-card,
+.track-log {
+    border-radius: 24px;
+    padding: var(--s-5);
+    box-shadow: var(--shadow-md);
+}
+
+.track-card {
+    position: relative;
+    overflow: hidden;
+    background:
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.14), transparent 32%),
+        linear-gradient(180deg, #ffffff 0%, #f7fbfb 100%);
+}
+
+.track-card::after {
+    content: "";
+    position: absolute;
+    inset: auto -40px -60px auto;
+    width: 180px;
+    height: 180px;
+    border-radius: 999px;
+    background: rgba(244, 182, 122, 0.16);
+    filter: blur(6px);
+    pointer-events: none;
+}
+
+.track-card--running {
+    border-color: rgba(15, 118, 110, 0.35);
+}
+
+.track-card--running .track-card__timer {
+    color: var(--primary);
+}
+
+.track-card--stopped_unsaved {
+    border-color: rgba(37, 99, 235, 0.28);
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 28%),
+        linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.track-card--loading {
+    min-height: 220px;
+    display: grid;
+    place-items: center;
+}
+
+.track-card__topline {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: var(--s-2);
+    gap: var(--s-3);
+    margin-bottom: var(--s-4);
 }
 
-.track__entries-title {
-    margin: 0;
-    font-size: 1rem;
-}
-
-.track__entries-total {
+.track-card__context {
     margin: 0;
     color: var(--text-2);
+    font-size: 0.95rem;
     font-weight: 600;
+}
+
+.track-card__state {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 999px;
+    padding: 8px 12px;
+    font-size: 0.875rem;
+    font-weight: 700;
+}
+
+.track-card__state--idle {
+    background: var(--surface-2);
+    color: var(--text-2);
+}
+
+.track-card__state--running {
+    background: var(--primary-soft);
+    color: var(--primary);
+}
+
+.track-card__state--stopped_unsaved {
+    background: var(--info-soft);
+    color: var(--info);
+}
+
+.track-card__state-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.8;
+}
+
+.track-card__state--running .track-card__state-dot {
+    animation: track-pulse 1.4s ease-in-out infinite;
+}
+
+.track-card__timer {
+    position: relative;
+    z-index: 1;
+    margin: 0 0 var(--s-5);
+    font-size: clamp(3rem, 9vw, 5.5rem);
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.04em;
+    line-height: 0.95;
+}
+
+.track-card__fields {
+    display: grid;
+    grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+    gap: var(--s-4);
+    align-items: start;
+}
+
+.track-field {
+    display: grid;
+    gap: var(--s-2);
+}
+
+.track-field span {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: var(--text-2);
+    letter-spacing: 0.02em;
+}
+
+.track-field textarea {
+    resize: vertical;
+    min-height: 92px;
+}
+
+.track-card__actions {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-3);
+    margin-top: var(--s-5);
+}
+
+.track-card__primary {
+    min-width: 180px;
+}
+
+.track-log {
+    background: var(--surface);
+}
+
+.track-log__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: var(--s-4);
+    margin-bottom: var(--s-4);
+}
+
+.track-log__title {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.track-log__subtitle {
+    margin: var(--s-1) 0 0;
+    color: var(--text-2);
+}
+
+.track-log__total {
+    margin: 0;
+    color: var(--text-2);
+    font-weight: 700;
 }
 
 .track-table {
@@ -749,10 +884,11 @@ function parseUtcDateTime(value: string) {
 }
 
 .track-table th {
-    font-size: 0.75rem;
     color: var(--text-3);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
 }
 
 .track-table td {
@@ -760,16 +896,16 @@ function parseUtcDateTime(value: string) {
 }
 
 .track-table__actions {
-    width: 110px;
+    width: 108px;
 }
 
 .btn-sm {
-    padding: 6px 10px;
+    padding: 7px 10px;
     font-size: 0.875rem;
 }
 
 .alert--inline {
-    margin-bottom: var(--s-4);
+    margin-top: calc(var(--s-5) * -0.5);
 }
 
 .muted {
@@ -777,23 +913,54 @@ function parseUtcDateTime(value: string) {
     color: var(--text-2);
 }
 
+@keyframes track-pulse {
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 0.65;
+    }
+    50% {
+        transform: scale(1.45);
+        opacity: 1;
+    }
+}
+
 @media (max-width: 980px) {
-    .track__grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+    .track-page__header,
+    .track-log__header,
+    .track-card__topline {
+        align-items: start;
+        flex-direction: column;
+    }
+
+    .track-card__fields {
+        grid-template-columns: 1fr;
     }
 }
 
 @media (max-width: 760px) {
-    .track {
+    .track-card,
+    .track-log {
         padding: var(--s-4);
+        border-radius: 20px;
     }
-    .track__header {
-        align-items: flex-start;
-        gap: var(--s-2);
+
+    .track-page__summary {
+        white-space: normal;
+    }
+
+    .track-card__timer {
+        margin-bottom: var(--s-4);
+        font-size: clamp(2.5rem, 14vw, 4rem);
+    }
+
+    .track-card__actions {
         flex-direction: column;
     }
-    .track__grid {
-        grid-template-columns: 1fr;
+
+    .track-card__primary,
+    .track-card__actions .btn {
+        width: 100%;
     }
 
     .track-table,
@@ -816,9 +983,9 @@ function parseUtcDateTime(value: string) {
 
     .track-table tr {
         border: 1px solid var(--border);
-        border-radius: var(--r-sm);
-        padding: var(--s-2);
-        background: var(--surface);
+        border-radius: var(--r-md);
+        padding: var(--s-3);
+        background: linear-gradient(180deg, var(--surface) 0%, #fbfcff 100%);
     }
 
     .track-table td {
@@ -829,12 +996,12 @@ function parseUtcDateTime(value: string) {
     .track-table td::before {
         content: attr(data-label);
         display: block;
-        font-size: 0.75rem;
-        color: var(--text-3);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-weight: 700;
         margin-bottom: 2px;
+        color: var(--text-3);
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
     }
 
     .track-table__actions {

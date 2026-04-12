@@ -18,6 +18,8 @@ export type AuthResponse = {
     userId: string
     email: string
     token: string | null
+    organizationId?: string | null
+    organizationName?: string | null
 }
 
 export const authApi = {

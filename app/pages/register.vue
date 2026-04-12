@@ -25,6 +25,8 @@ const accountReady = computed(
     confirm.value
 )
 
+const organizationReady = computed(() => organizationName.value.trim())
+
 async function onCreateAccount() {
   error.value = null
 
@@ -36,8 +38,19 @@ async function onCreateAccount() {
   step.value = 2
 }
 
-async function onCompleteRegistration() {
+function goBack() {
   error.value = null
+  step.value = 1
+}
+
+async function onSubmit() {
+  error.value = null
+
+  if (!organizationName.value.trim()) {
+    error.value = "Organization name is required."
+    return
+  }
+
   registerLoading.value = true
   try {
     await register(
@@ -86,7 +99,7 @@ async function onCompleteRegistration() {
 
       <form v-if="step === 1" @submit.prevent="onCreateAccount" class="form" aria-label="Create account form">
         <h2>Create your account</h2>
-        <p class="muted">Start your free setup in less than a minute.</p>
+        <p class="muted">Set your credentials first, then create the organization before you enter the app.</p>
 
         <label>
           First name
@@ -116,7 +129,7 @@ async function onCompleteRegistration() {
         <p v-if="error" class="error">{{ error }}</p>
 
         <button class="btn" type="submit" :disabled="!accountReady">
-          Next
+          Continue
         </button>
 
         <p class="muted small">
@@ -125,9 +138,9 @@ async function onCompleteRegistration() {
         </p>
       </form>
 
-      <form v-else @submit.prevent="onCompleteRegistration" class="form" aria-label="Create organization form">
+      <form v-else @submit.prevent="onSubmit" class="form" aria-label="Create organization form">
         <h2>Create your organization</h2>
-        <p class="muted">Set up your workspace. You can invite your team later.</p>
+        <p class="muted">This workspace will be created as part of signup, before you land in the app.</p>
 
         <label>
           Organization name
@@ -136,9 +149,14 @@ async function onCompleteRegistration() {
 
         <p v-if="error" class="error">{{ error }}</p>
 
-        <button class="btn" type="submit" :disabled="registerLoading || !organizationName.trim()">
-          {{ registerLoading ? "Creating workspace..." : "Finish setup" }}
-        </button>
+        <div class="actions">
+          <button class="btn btn-secondary" type="button" @click="goBack">
+            Back
+          </button>
+          <button class="btn" type="submit" :disabled="registerLoading || !organizationReady">
+            {{ registerLoading ? "Creating workspace..." : "Finish setup" }}
+          </button>
+        </div>
       </form>
 
       <p class="form-logo">TIMES</p>
@@ -284,6 +302,20 @@ input:focus {
   color: #fff;
   font-weight: 700;
   cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.actions .btn {
+  flex: 1;
+}
+
+.btn-secondary {
+  background: #e7eef5;
+  color: #183b56;
 }
 
 .btn:disabled {

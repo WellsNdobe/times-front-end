@@ -7,7 +7,7 @@ export default defineNuxtConfig({
         { path: '~/app/components', pathPrefix: false },
     ],
     compatibilityDate: '2025-07-15',
-    devtools: { enabled: true },
+    devtools: { enabled: false },
     modules: ['@nuxt/image', '@nuxt/ui', '@nuxt/hints', 'nuxt-icon'],
     css: [
         '~/assets/styles/tokens.css',

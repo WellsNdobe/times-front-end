@@ -21,16 +21,15 @@ export function toUiError(err: unknown): UiError {
     if (!status) {
         return {
             title: "Connection problem",
-            message: "We couldn’t reach the server. Check your internet connection and try again.",
+            message: "We could not reach the server. Check your internet connection and try again.",
             code: "NETWORK",
         }
     }
 
-    // Auth-specific friendly messages
     if (status === 401) {
         return {
-            title: "Sign-in failed",
-            message: "That email or password isn’t correct. Please try again.",
+            title: "Session expired",
+            message: "You need to sign in again to continue.",
             code: "UNAUTHORIZED",
         }
     }
@@ -38,7 +37,7 @@ export function toUiError(err: unknown): UiError {
     if (status === 403) {
         return {
             title: "Access denied",
-            message: "Your account doesn’t have permission to sign in here.",
+            message: "Your account does not have permission to do that.",
             code: "FORBIDDEN",
         }
     }
@@ -59,7 +58,6 @@ export function toUiError(err: unknown): UiError {
         }
     }
 
-    // Validation / bad request — show backend message if it looks safe and human
     const backendMsg =
         typeof data?.message === "string"
             ? data.message
@@ -69,15 +67,15 @@ export function toUiError(err: unknown): UiError {
 
     if (backendMsg && backendMsg.length <= 160) {
         return {
-            title: "Couldn’t sign in",
+            title: "Request failed",
             message: backendMsg,
             code: String(status),
         }
     }
 
     return {
-        title: "Couldn’t sign in",
-        message: "Please check your details and try again.",
+        title: "Request failed",
+        message: "Please try again.",
         code: String(status),
     }
 }

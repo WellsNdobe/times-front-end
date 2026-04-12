@@ -11,8 +11,6 @@ export type ActiveTimerSession = {
     notes: string | null
     startedAtUtc: string
     utcOffsetMinutes: number
-    createdAtUtc: string
-    updatedAtUtc: string
 }
 
 export type StartActiveTimerSessionRequest = {
